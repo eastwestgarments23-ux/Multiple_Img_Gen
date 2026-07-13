@@ -20,7 +20,7 @@ app.use(express.urlencoded({ limit: '100mb', extended: true }));
 const TIER_LIMITS = {
     'free': 10,
     'pro': 50,
-    'elite': 200
+    'elite': 100
 };
 
 const TIER_PRICING = {
@@ -29,8 +29,8 @@ const TIER_PRICING = {
 };
 
 const razorpayInstance = new Razorpay({
-    key_id: process.env.RAZORPAY_KEY_ID || 'dummy_id',
-    key_secret: process.env.RAZORPAY_KEY_SECRET || 'dummy_secret',
+    key_id: process.env.RAZORPAY_KEY_ID,
+    key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
 // ==========================================
