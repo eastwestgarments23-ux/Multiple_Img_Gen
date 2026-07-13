@@ -196,7 +196,7 @@ app.post('/api/generate-pose', authenticateToken, async (req, res) => {
         1. DO NOT create a collage, mood board, or split screen. Generate exactly ONE single, unified, standalone photograph.
         2. Analyze Image 1 (The Clothing Product).
         3. Analyze Image 2 (The Reference Pose).
-        4. Generate a photorealistic image of a person of ${ethnicity} descent.
+        4. Generate a photorealistic, safe, and professional catalog image of a person of ${ethnicity} descent.
         5. The person MUST be wearing the exact clothing item from Image 1.
         6. The person MUST be striking the exact same body pose, angle, and framing as shown in Image 2.
         Output only one portrait image of one person.`;
@@ -233,10 +233,18 @@ app.post('/api/generate-pose', authenticateToken, async (req, res) => {
             throw new Error(outputPayloadJson.error?.message || `Upstream Engine Failure: ${apiResponse.statusText}`);
         }
 
+        const candidate = outputPayloadJson.candidates?.[0];
+
+        // 🔥 FIX: Explicitly catch and report AI Safety/Refusal blocks
+        if (candidate?.finishReason && candidate.finishReason !== 'STOP') {
+            console.warn(`⚠️ AI Refused Generation for Pose ${poseId}. Reason: ${candidate.finishReason}`);
+            throw new Error(`AI Blocked Request (Reason: ${candidate.finishReason}). This usually means the input images triggered Google's strict safety filters.`);
+        }
+
         let extractedBase64String = null;
         let extractedMimeType = 'image/jpeg';
 
-        const parts = outputPayloadJson.candidates?.[0]?.content?.parts || [];
+        const parts = candidate?.content?.parts || [];
         for (const part of parts) {
             if (part.inlineData && part.inlineData.data) {
                 extractedBase64String = part.inlineData.data;
@@ -246,7 +254,9 @@ app.post('/api/generate-pose', authenticateToken, async (req, res) => {
         }
 
         if (!extractedBase64String) {
-            throw new Error("API request succeeded, but no image data was returned.");
+            // Log the exact raw payload so we can see what Google actually sent back in the terminal
+            console.error("Raw Empty Payload from Google:", JSON.stringify(outputPayloadJson, null, 2));
+            throw new Error("Google API succeeded but returned no image. Check the backend terminal for the raw response payload.");
         }
 
         const dynamicParentFolder = `Model_${modelId}_${sourceName || 'Unknown'}`;
