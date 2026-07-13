@@ -4,16 +4,16 @@ import JSZip from 'jszip';
 
 // Centralized Static Model Data
 const AVAILABLE_MODELS = [
-  { id: '1', ethnicity: 'african', name: 'Model 1 Array (African)', poses: [{ id: '1', src: '/African/M1_Pose1.png' }, { id: '2', src: '/African/M1_Pose2.png' }, { id: '3', src: '/African/M1_Pose3.png' }, { id: '4', src: '/African/M1_Pose4.png' }] },
-  { id: '2', ethnicity: 'korean', name: 'Model 2 Array (Korean)', poses: [{ id: '1', src: '/Korean/M2_Pose1.png' }, { id: '2', src: '/Korean/M2_Pose2.png' }, { id: '3', src: '/Korean/M2_Pose3.png' }, { id: '4', src: '/Korean/M2_Pose4.png' }] },
-  { id: '3', ethnicity: 'indian', name: 'Model 3 Array (Indian)', poses: [{ id: '1', src: '/Indian/M1_pose1.png' }, { id: '2', src: '/Indian/M1_Pose2.png' }, { id: '3', src: '/Indian/M1_Pose3.png' }] },
-  { id: '4', ethnicity: 'australian', name: 'Model 4 Array (Australian)', poses: [{ id: '1', src: '/Australian/M4_Pose1.png' }, { id: '2', src: '/Australian/M4_Pose2.png' }, { id: '3', src: '/Australian/M4_Pose3.png' }, { id: '4', src: '/Australian/M4_Pose4.png' }] },
-  { id: '5', ethnicity: 'malaysian_indonesian', name: 'Model 5 Array (Malaysian/Indonesian)', poses: [{ id: '1', src: '/Malaysian/M5_Pose1.png' }, { id: '2', src: '/Malaysian/M5_Pose2.png' }, { id: '3', src: '/Malaysian/M5_Pose3.png' }, { id: '4', src: '/Malaysian/M5_Pose4.png' }] },
-  { id: '6', ethnicity: 'middle_eastern', name: 'Model 6 Array (Middle Eastern)', poses: [{ id: '1', src: '/MiddleEastern/M6_Pose1.png' }, { id: '2', src: '/MiddleEastern/M6_Pose2.png' }, { id: '3', src: '/MiddleEastern/M6_Pose3.png' }, { id: '4', src: '/MiddleEastern/M6_Pose4.png' }] },
-  { id: '7', ethnicity: 'chinese', name: 'Model 7 Array (Chinese)', poses: [{ id: '1', src: '/Chinese/M7_Pose1.png' }, { id: '2', src: '/Chinese/M7_Pose2.png' }, { id: '3', src: '/Chinese/M7_Pose3.png' }, { id: '4', src: '/Chinese/M7_Pose4.png' }] },
-  { id: '8', ethnicity: 'japanese', name: 'Model 8 Array (Japanese)', poses: [{ id: '1', src: '/Japanese/M8_Pose1.png' }, { id: '2', src: '/Japanese/M8_Pose2.png' }, { id: '3', src: '/Japanese/M8_Pose3.png' }, { id: '4', src: '/Japanese/M8_Pose4.png' }] },
-  { id: '9', ethnicity: 'european', name: 'Model 9 Array (European)', poses: [{ id: '1', src: '/European/M9_Pose1.png' }, { id: '2', src: '/European/M9_Pose2.png' }, { id: '3', src: '/European/M9_Pose3.png' }, { id: '4', src: '/European/M9_Pose4.png' }] },
-  { id: '10', ethnicity: 'russian', name: 'Model 10 Array (Russian)', poses: [{ id: '1', src: '/Russian/M10_Pose1.png' }, { id: '2', src: '/Russian/M10_Pose2.png' }, { id: '3', src: '/Russian/M10_Pose3.png' }, { id: '4', src: '/Russian/M10_Pose4.png' }] }
+  { id: '1', ethnicity: 'african', name: 'Model 1 Array (African)', poses: [{ id: '1', src: '/African/M1_pose1.png' }, { id: '2', src: '/African/M1_pose2.png' }, { id: '3', src: '/African/M1_pose3.png' }, { id: '4', src: '/African/M1_pose4.png' }] },
+  { id: '2', ethnicity: 'korean', name: 'Model 2 Array (Korean)', poses: [{ id: '1', src: '/Korean/M1_pose1.png' }, { id: '2', src: '/Korean/M1_pose2.png' }, { id: '3', src: '/Korean/M1_pose3.png' }, { id: '4', src: '/Korean/M1_pose4.png' }] },
+  { id: '3', ethnicity: 'indian', name: 'Model 3 Array (Indian)', poses: [{ id: '1', src: '/Indian/M1_pose1.png' }, { id: '2', src: '/Indian/M1_pose2.png' }, { id: '3', src: '/Indian/M1_pose3.png' }] },
+  { id: '4', ethnicity: 'australian', name: 'Model 4 Array (Australian)', poses: [{ id: '1', src: '/Australian/M1_pose1.png' }, { id: '2', src: '/Australian/M1_pose2.png' }, { id: '3', src: '/Australian/M1_pose3.png' }, { id: '4', src: '/Australian/M1_pose4.png' }] },
+  { id: '5', ethnicity: 'malaysian_indonesian', name: 'Model 5 Array (Malaysian/Indonesian)', poses: [{ id: '1', src: '/Malaysian/M1_pose1.png' }, { id: '2', src: '/Malaysian/M1_pose2.png' }, { id: '3', src: '/Malaysian/M1_pose3.png' }, { id: '4', src: '/Malaysian/M1_pose4.png' }] },
+  { id: '6', ethnicity: 'middle_eastern', name: 'Model 6 Array (Middle Eastern)', poses: [{ id: '1', src: '/MiddleEastern/M1_pose1.png' }, { id: '2', src: '/MiddleEastern/M1_pose2.png' }, { id: '3', src: '/MiddleEastern/M1_pose3.png' }, { id: '4', src: '/MiddleEastern/M1_pose4.png' }] },
+  { id: '7', ethnicity: 'chinese', name: 'Model 7 Array (Chinese)', poses: [{ id: '1', src: '/Chinese/M1_pose1.png' }, { id: '2', src: '/Chinese/M1_pose2.png' }, { id: '3', src: '/Chinese/M1_pose3.png' }, { id: '4', src: '/Chinese/M1_pose4.png' }] },
+  { id: '8', ethnicity: 'japanese', name: 'Model 8 Array (Japanese)', poses: [{ id: '1', src: '/Japanese/M1_pose1.png' }, { id: '2', src: '/Japanese/M1_pose2.png' }, { id: '3', src: '/Japanese/M1_pose3.png' }, { id: '4', src: '/Japanese/M1_pose4.png' }] },
+  { id: '9', ethnicity: 'european', name: 'Model 9 Array (European)', poses: [{ id: '1', src: '/European/M1_pose1.png' }, { id: '2', src: '/European/M1_pose2.png' }, { id: '3', src: '/European/M1_pose3.png' }, { id: '4', src: '/European/M1_pose4.png' }] },
+  { id: '10', ethnicity: 'russian', name: 'Model 10 Array (Russian)', poses: [{ id: '1', src: '/Russian/M1_pose1.png' }, { id: '2', src: '/Russian/M1_pose2.png' }, { id: '3', src: '/Russian/M1_pose3.png' }, { id: '4', src: '/Russian/M11_pose4.png' }] }
 ];
 
 const TIERS = {
