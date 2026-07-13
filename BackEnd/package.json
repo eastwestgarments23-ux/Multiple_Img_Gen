@@ -11,17 +11,18 @@
     "express",
     "mysql",
     "api",
-    "gemini"
+    "gemini",
+    "razorpay"
   ],
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "bcrypt": "^6.0.0",
+    "bcrypt": "^5.1.1",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
-    "jsonwebtoken": "^9.0.3",
-    "mysql2": "^3.22.6"
-  },
-  "type": "commonjs"
+    "jsonwebtoken": "^9.0.2",
+    "mysql2": "^3.22.6",
+    "razorpay": "^2.9.2"
+  }
 }
