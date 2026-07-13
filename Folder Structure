@@ -1,0 +1,20 @@
+├── BackEnd/
+│   ├── server.js          # Main Express application & API routing
+│   ├── package.json       # Backend dependencies
+│   └── .env               # Environment configuration
+│
+└── FrontEnd/
+    ├── index.html         # Vite HTML entry point
+    ├── vite.config.js     # Vite config & Backend proxy
+    ├── package.json       # Frontend dependencies
+    └── src/
+        ├── main.jsx       # React DOM root & Router setup
+        ├── App.jsx        # Main layout & Route definitions
+        ├── index.css      # Aurora UI CSS Design System
+        ├── components/
+        │   └── Navbar.jsx # Navigation header
+        └── pages/
+            ├── Login.jsx      # Authentication login
+            ├── Signup.jsx     # User registration
+            ├── Profile.jsx    # User dashboard & rate limit status
+            └── Generator.jsx  # Core AI generation matrix
