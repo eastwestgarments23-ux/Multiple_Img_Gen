@@ -231,7 +231,7 @@ app.post('/api/generate-pose', authenticateToken, async (req, res) => {
         if (!base64Image) return res.status(400).json({ error: "Missing required product image." });
 
         const apiKey = process.env.GEMINI_API_KEY;
-        const modelName = "gemini-2.5-flash-image";
+        const modelName = "gemini-3.1-flash-image-preview"; // Example model name, adjust as needed
         const geminiApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
 
         const contextualAiPrompt = `You are a professional Virtual Try-On fashion AI. 
