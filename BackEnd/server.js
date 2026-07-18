@@ -23,9 +23,34 @@ const TIER_LIMITS = {
     'elite': 100
 };
 
-const TIER_PRICING = {
-    'pro': 999,   // ₹999
-    'elite': 2499 // ₹2499
+// Comprehensive Dynamic International Pricing Matrix
+const REGIONAL_CURRENCY_CONFIG = {
+    'IN': { currency: 'INR', symbol: '₹', pricing: { 'pro': 999, 'elite': 2499 } },      // India
+    'JP': { currency: 'JPY', symbol: '¥', pricing: { 'pro': 1800, 'elite': 4500 } },    // Japan
+    'SG': { currency: 'SGD', symbol: 'S$', pricing: { 'pro': 16, 'elite': 40 } },       // Singapore
+    'MY': { currency: 'MYR', symbol: 'RM', pricing: { 'pro': 55, 'elite': 140 } },      // Malaysia
+    'RU': { currency: 'RUB', symbol: '₽', pricing: { 'pro': 1100, 'elite': 2800 } },    // Russia
+    'ID': { currency: 'IDR', symbol: 'Rp', pricing: { 'pro': 190000, 'elite': 480000 } },// Indonesia
+    'AU': { currency: 'AUD', symbol: 'A$', pricing: { 'pro': 18, 'elite': 45 } },       // Australia
+    'AE': { currency: 'AED', symbol: 'AED', pricing: { 'pro': 44, 'elite': 110 } },     // UAE & Middle East Fallback
+    'BR': { currency: 'BRL', symbol: 'R$', pricing: { 'pro': 60, 'elite': 150 } },      // Brazil & South America Fallback
+    'NE': { currency: 'XOF', symbol: 'CFA', pricing: { 'pro': 7000, 'elite': 18000 } },  // Niger
+    'US': { currency: 'USD', symbol: '$', pricing: { 'pro': 12, 'elite': 30 } },        // North America / Global Default
+    'EU': { currency: 'EUR', symbol: '€', pricing: { 'pro': 11, 'elite': 28 } }         // Europe Fallback
+};
+
+// Macro Region to Currency ISO Code Mappings
+const COUNTRY_GEO_FALLBACKS = {
+    // Middle East
+    'SA': 'AE', 'OM': 'AE', 'QA': 'AE', 'KW': 'AE', 'BH': 'AE', 'JO': 'AE', 'LB': 'AE',
+    // Europe Region
+    'FR': 'EU', 'DE': 'EU', 'IT': 'EU', 'ES': 'EU', 'NL': 'EU', 'BE': 'EU', 'AT': 'EU',
+    // North America
+    'CA': 'US', 'MX': 'US',
+    // South America
+    'AR': 'BR', 'CL': 'BR', 'CO': 'BR', 'PE': 'BR',
+    // Africa Region
+    'NG': 'NE', 'GH': 'NE', 'ZA': 'US', 'KE': 'US'
 };
 
 const razorpayInstance = new Razorpay({
@@ -107,7 +132,7 @@ async function initDB() {
 initDB();
 
 // ==========================================
-// MIDDLEWARE
+// MIDDLEWARE & HELPERS
 // ==========================================
 function authenticateToken(req, res, next) {
     const authHeader = req.headers['authorization'];
@@ -121,7 +146,62 @@ function authenticateToken(req, res, next) {
     });
 }
 
+/**
+ * Robust GeoIP Country Detection resolving Hostinger proxy contexts,
+ * standard reverse proxy headers, and supporting local testing query variables.
+ */
+function detectRequestCountry(req) {
+    if (req.query && req.query.test_country) {
+        return req.query.test_country.toUpperCase();
+    }
+    
+    const derivedCode = 
+        req.headers['cf-ipcountry'] || 
+        req.headers['x-country-code'] || 
+        req.headers['x-real-ip-country'] ||
+        req.headers['http_x_country_code'];
+        
+    if (derivedCode) {
+        return derivedCode.toUpperCase();
+    }
+    
+    return 'IN'; // Local development testing fallback default
+}
+
+/**
+ * Maps standard country code to matching currency profiles with structural fallbacks
+ */
+function getCurrencyProfile(countryCode) {
+    let cleanCode = countryCode ? countryCode.trim().toUpperCase() : 'IN';
+    
+    if (REGIONAL_CURRENCY_CONFIG[cleanCode]) {
+        return REGIONAL_CURRENCY_CONFIG[cleanCode];
+    }
+    
+    if (COUNTRY_GEO_FALLBACKS[cleanCode]) {
+        const structuralKey = COUNTRY_GEO_FALLBACKS[cleanCode];
+        return REGIONAL_CURRENCY_CONFIG[structuralKey];
+    }
+    
+    return REGIONAL_CURRENCY_CONFIG['US']; // Universal international currency fallback
+}
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// ==========================================
+// GEO DETECT ENDPOINT
+// ==========================================
+app.get('/api/detect-currency', (req, res) => {
+    const geoCountry = detectRequestCountry(req);
+    const profile = getCurrencyProfile(geoCountry);
+    res.json({
+        success: true,
+        country: geoCountry,
+        currency: profile.currency,
+        symbol: profile.symbol,
+        pricing: profile.pricing
+    });
+});
 
 // ==========================================
 // AUTHENTICATION ENDPOINTS
@@ -160,22 +240,36 @@ app.post('/api/login', async (req, res) => {
 });
 
 // ==========================================
-// PAYMENT ENDPOINTS (RAZORPAY)
+// PAYMENT ENDPOINTS (DYNAMIC GEOLOCATION RAZORPAY)
 // ==========================================
 app.post('/api/create-payment', authenticateToken, async (req, res) => {
     try {
         const { targetTier } = req.body;
-        if (!TIER_PRICING[targetTier]) return res.status(400).json({ error: "Invalid tier." });
+        const targetCountry = detectRequestCountry(req);
+        const currencyProfile = getCurrencyProfile(targetCountry);
+        
+        if (!currencyProfile.pricing[targetTier]) {
+            return res.status(400).json({ error: "Invalid plan tier specification." });
+        }
 
-        const amount = TIER_PRICING[targetTier] * 100; // Razorpay expects paise
+        const exactPrice = currencyProfile.pricing[targetTier];
+        // Razorpay handles zero-decimal vs decimal multipliers via base units (paise/cents)
+        const amountMultiplier = ['JPY'].includes(currencyProfile.currency) ? 1 : 100;
+        const atomicAmount = exactPrice * amountMultiplier;
 
         const order = await razorpayInstance.orders.create({
-            amount,
-            currency: "INR",
+            amount: atomicAmount,
+            currency: currencyProfile.currency === 'CFA' ? 'XOF' : currencyProfile.currency,
             receipt: `receipt_${req.user.id}_${Date.now()}`
         });
 
-        res.json({ success: true, order, keyId: process.env.RAZORPAY_KEY_ID });
+        res.json({ 
+            success: true, 
+            order, 
+            keyId: process.env.RAZORPAY_KEY_ID,
+            displayCurrency: currencyProfile.currency,
+            displaySymbol: currencyProfile.symbol
+        });
     } catch (err) {
         console.error("Razorpay Order Error:", err);
         res.status(500).json({ error: "Failed to create payment order." });
@@ -202,7 +296,7 @@ app.post('/api/verify-payment', authenticateToken, async (req, res) => {
 });
 
 // ==========================================
-// IMAGE GENERATION ENDPOINT
+// IMAGE GENERATION ENDPOINT (GEMINI 2.5 FLASH IMAGE)
 // ==========================================
 app.post('/api/generate-pose', authenticateToken, async (req, res) => {
     try {
@@ -231,21 +325,22 @@ app.post('/api/generate-pose', authenticateToken, async (req, res) => {
         if (!base64Image) return res.status(400).json({ error: "Missing required product image." });
 
         const apiKey = process.env.GEMINI_API_KEY;
-        const modelName = "gemini-3.1-flash-image-preview"; // Example model name, adjust as needed
+        const modelName = "gemini-2.5-flash-image"; 
         const geminiApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
 
-        const contextualAiPrompt = `You are a professional Virtual Try-On fashion AI. 
-        CRITICAL INSTRUCTIONS:
-        1. DO NOT create a collage, mood board, or split screen. Generate exactly ONE single, unified, standalone photograph.
-        2. Analyze Image 1 (The Clothing Product).
-        3. Analyze Image 2 (The Reference Pose).
-        4. Generate a photorealistic, safe, and professional catalog image of a person of ${ethnicity} descent.
-        5. The person MUST be wearing the exact clothing item from Image 1.
-        6. The person MUST be striking the exact same body pose, angle, and framing as shown in Image 2.
-        Output only one portrait image of one person.`;
+        // Explicit structural prompts directly honoring user demographic configurations
+        const contextualAiPrompt = `You are a professional Virtual Try-On fashion AI engine. 
+        CRITICAL OPERATIONAL INSTRUCTIONS:
+        1. DO NOT produce a collage, grid layout, split canvas, or side-by-side comparative screen. Generate exactly ONE single, integrated standalone high-fashion photograph.
+        2. Carefully extract and isolate the texture, cuts, styling, and graphics from Image 1 (The Clothing Product).
+        3. Match the pose coordinates, lighting shadows, body angle, framing depth, and anatomy structure of Image 2 (The Reference Pose).
+        4. Synthesize a pristine, photorealistic catalog asset featuring a fashion model strictly embodying a clear ${ethnicity || 'natural'} appearance, face structure, and skin tone.
+        5. The resulting person must look highly natural, wearing the identical garment from Image 1 while perfectly replicating the posture from Image 2.
+        Provide only one high-fidelity product output image.`;
 
         const requestParts = [
             { text: contextualAiPrompt },
+            { text: `Target Ethnic Representation Strategy: Explicitly represent a clear ${ethnicity || 'natural'} look.` },
             { text: "Image 1 (The Clothing Product to wear):" },
             { inlineData: { mimeType: mimeType || 'image/jpeg', data: base64Image } }
         ];
@@ -262,7 +357,7 @@ app.post('/api/generate-pose', authenticateToken, async (req, res) => {
 
         for (let attempt = 1; attempt <= 3; attempt++) {
             try {
-                console.log(`[Attempt ${attempt}/3] Gemini API: User[${userId}] Model[${modelId}] Pose[${poseId}]`);
+                console.log(`[Attempt ${attempt}/3] Gemini API Processing: User[${userId}] Ethnicity[${ethnicity}] Pose[${poseId}]`);
                 
                 const apiResponse = await fetch(geminiApiUrl, {
                     method: 'POST',
@@ -287,8 +382,7 @@ app.post('/api/generate-pose', authenticateToken, async (req, res) => {
 
                 const candidate = outputPayloadJson.candidates?.[0];
                 if (candidate?.finishReason && candidate.finishReason !== 'STOP') {
-                    // Safety blocks shouldn't be retried, they will just fail again
-                    throw new Error(`SAFETY_BLOCK: AI Refused (Reason: ${candidate.finishReason})`);
+                    throw new Error(`SAFETY_BLOCK: AI Engine Execution Blocked (Reason: ${candidate.finishReason})`);
                 }
 
                 const parts = candidate?.content?.parts || [];
@@ -301,20 +395,20 @@ app.post('/api/generate-pose', authenticateToken, async (req, res) => {
                 }
 
                 if (extractedBase64String) {
-                    break; // Success! Break out of the retry loop
+                    break;
                 } else {
-                    throw new Error("Empty image payload received from Google.");
+                    throw new Error("Empty image payload received from Google API.");
                 }
 
             } catch (attemptErr) {
                 lastError = attemptErr;
-                if (attemptErr.message.includes("SAFETY_BLOCK")) break; // Don't retry safety blocks
-                if (attempt < 3) await sleep(2000); // Wait 2s before retry
+                if (attemptErr.message.includes("SAFETY_BLOCK")) break;
+                if (attempt < 3) await sleep(2000);
             }
         }
 
         if (!extractedBase64String) {
-            console.error(`Pipeline Failed after retries:`, lastError?.message);
+            console.error(`AI Pipeline Execution Breakdown:`, lastError?.message);
             throw new Error(lastError?.message || "Engine failed to generate image after multiple attempts.");
         }
 
@@ -348,15 +442,14 @@ app.get('/api/gallery', authenticateToken, async (req, res) => {
         const limit = 10;
         const offset = (page - 1) * limit;
 
-        // Cap at 5 pages max (50 items)
         if (page > 5) return res.json({ success: true, count: 0, data: [], totalPages: 5 });
 
         const [totalRows] = await pool.query(`SELECT COUNT(*) as count FROM generated_images WHERE user_id = ?`, [userId]);
-        const totalItems = Math.min(totalRows[0].count, 50); // Cap absolute total to 50 for pagination logic
+        const totalItems = Math.min(totalRows[0].count, 50); 
         const totalPages = Math.ceil(totalItems / limit);
 
         const [rows] = await pool.query(
-            `SELECT id, parent_folder, file_name, mime_type, created_at FROM generated_images WHERE user_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+            `SELECT id, parent_folder, file_name, mime_type, created_at FROM generated_images WHERE user_id = ? ORDER BY CURRENT_TIMESTAMP DESC LIMIT ? OFFSET ?`,
             [userId, limit, offset]
         );
         
