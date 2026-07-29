@@ -1,9 +1,12 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { UserPlus, Mail, Lock, User, Phone, AlertCircle, Loader2 } from 'lucide-react';
+import { UserPlus, Mail, Lock, User, Phone, AlertCircle, Loader2, KeyRound, ArrowLeft } from 'lucide-react';
+import { auth, RecaptchaVerifier, signInWithPhoneNumber } from '../firebase';
 
 export default function Signup() {
   const navigate = useNavigate();
+  
+  // Form State
   const [formData, setFormData] = useState({
     name: '',
     email: '',
@@ -11,20 +14,48 @@ export default function Signup() {
     password: '',
     confirmPassword: ''
   });
+  
+  // OTP Flow State
+  const [showOtpStep, setShowOtpStep] = useState(false);
+  const [otp, setOtp] = useState('');
+  const [confirmationResult, setConfirmationResult] = useState(null);
+  
+  // UI State
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+
+  // Initialize Recaptcha once
+  useEffect(() => {
+    if (!window.recaptchaVerifier) {
+      window.recaptchaVerifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
+        size: 'invisible',
+        callback: () => {
+          // reCAPTCHA solved - allow signInWithPhoneNumber.
+        },
+        'expired-callback': () => {
+          setError("Recaptcha expired. Please try again.");
+        }
+      });
+    }
+  }, []);
 
   const handleChange = (e) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
     if (error) setError('');
   };
 
-  const handleSubmit = async (e) => {
+  // Step 1: Validate and Send OTP
+  const handleSendOtp = async (e) => {
     e.preventDefault();
     
     // Frontend Validation
     if (!formData.name || !formData.email || !formData.phone || !formData.password) {
       setError("Name, email, phone, and password are required.");
+      return;
+    }
+
+    if (!formData.phone.startsWith('+')) {
+      setError("Phone number must include your country code (e.g., +91 for India, +1 for US).");
       return;
     }
 
@@ -37,6 +68,39 @@ export default function Signup() {
     setError('');
 
     try {
+      const appVerifier = window.recaptchaVerifier;
+      const result = await signInWithPhoneNumber(auth, formData.phone, appVerifier);
+      setConfirmationResult(result);
+      setShowOtpStep(true);
+    } catch (err) {
+      console.error("OTP Error:", err);
+      // Clean up recaptcha to allow retry if it failed
+      if (window.recaptchaVerifier) {
+        window.recaptchaVerifier.render().then(widgetId => window.grecaptcha.reset(widgetId));
+      }
+      setError(err.message || "Failed to send OTP. Please check your phone number.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Step 2: Verify OTP and Register in Backend
+  const handleVerifyAndSignup = async (e) => {
+    e.preventDefault();
+    
+    if (!otp || otp.length < 6) {
+      setError("Please enter the 6-digit OTP.");
+      return;
+    }
+
+    setIsLoading(true);
+    setError('');
+
+    try {
+      // 1. Verify OTP with Firebase
+      await confirmationResult.confirm(otp);
+
+      // 2. Register user in Backend (MySQL)
       const response = await fetch('/api/signup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -51,14 +115,15 @@ export default function Signup() {
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to create account.');
+        throw new Error(data.error || 'Failed to create backend account.');
       }
 
-      // Route to login on successful creation
-      navigate('/login', { state: { message: "Account created successfully. Please log in." } });
+      // 3. Navigate to login on success
+      navigate('/login', { state: { message: "Account verified & created successfully. Please log in." } });
       
     } catch (err) {
-      setError(err.message);
+      console.error("Verification Error:", err);
+      setError(err.message || "Invalid OTP code. Please try again.");
     } finally {
       setIsLoading(false);
     }
@@ -83,7 +148,32 @@ export default function Signup() {
         gap: '1.5rem'
       }}>
         
-        <div style={{ textAlign: 'center' }}>
+        {/* Invisible ReCaptcha Container for Firebase Phone Auth */}
+        <div id="recaptcha-container"></div>
+
+        <div style={{ textAlign: 'center', position: 'relative' }}>
+          {showOtpStep && (
+            <button 
+              onClick={() => setShowOtpStep(false)}
+              style={{
+                position: 'absolute',
+                left: 0,
+                top: '50%',
+                transform: 'translateY(-50%)',
+                background: 'none',
+                border: 'none',
+                color: 'var(--aurora-text-muted)',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                padding: '0.5rem'
+              }}
+              title="Back to Details"
+            >
+              <ArrowLeft size={20} />
+            </button>
+          )}
+
           <div style={{
             display: 'inline-flex',
             alignItems: 'center',
@@ -95,11 +185,13 @@ export default function Signup() {
             marginBottom: '1rem',
             boxShadow: 'var(--shadow-md)'
           }}>
-            <UserPlus size={28} />
+            {showOtpStep ? <KeyRound size={28} /> : <UserPlus size={28} />}
           </div>
-          <h1 style={{ fontSize: '1.75rem', fontWeight: 700, margin: '0 0 0.5rem 0' }}>Create an Account</h1>
+          <h1 style={{ fontSize: '1.75rem', fontWeight: 700, margin: '0 0 0.5rem 0' }}>
+            {showOtpStep ? 'Verify Phone' : 'Create an Account'}
+          </h1>
           <p style={{ color: 'var(--aurora-text-muted)', margin: 0, fontSize: '0.95rem' }}>
-            Join Aurora Generator to start creating try-on poses.
+            {showOtpStep ? `Enter the 6-digit code sent to ${formData.phone}` : 'Join Aurora Generator to start creating try-on poses.'}
           </p>
         </div>
 
@@ -121,129 +213,171 @@ export default function Signup() {
           </div>
         )}
 
-        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-          
-          {/* Grid for Name and Phone on larger screens, stacks on mobile */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1.25rem' }}>
+        {!showOtpStep ? (
+          /* STEP 1: Details Collection */
+          <form onSubmit={handleSendOtp} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+            
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1.25rem' }}>
+              <div>
+                <label className="aurora-label" htmlFor="name">Full Name</label>
+                <div style={{ position: 'relative' }}>
+                  <div style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--aurora-text-muted)' }}>
+                    <User size={18} />
+                  </div>
+                  <input
+                    type="text"
+                    id="name"
+                    name="name"
+                    className="aurora-input"
+                    style={{ paddingLeft: '2.75rem' }}
+                    placeholder="John Doe"
+                    value={formData.name}
+                    onChange={handleChange}
+                    disabled={isLoading}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="aurora-label" htmlFor="phone">Phone Number</label>
+                <div style={{ position: 'relative' }}>
+                  <div style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--aurora-text-muted)' }}>
+                    <Phone size={18} />
+                  </div>
+                  <input
+                    type="tel"
+                    id="phone"
+                    name="phone"
+                    className="aurora-input"
+                    style={{ paddingLeft: '2.75rem' }}
+                    placeholder="+919876543210"
+                    value={formData.phone}
+                    onChange={handleChange}
+                    disabled={isLoading}
+                  />
+                </div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--aurora-text-muted)', marginTop: '0.25rem' }}>Include country code (e.g., +91)</div>
+              </div>
+            </div>
+
             <div>
-              <label className="aurora-label" htmlFor="name">Full Name</label>
+              <label className="aurora-label" htmlFor="email">Email Address</label>
               <div style={{ position: 'relative' }}>
                 <div style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--aurora-text-muted)' }}>
-                  <User size={18} />
+                  <Mail size={18} />
                 </div>
                 <input
-                  type="text"
-                  id="name"
-                  name="name"
+                  type="email"
+                  id="email"
+                  name="email"
                   className="aurora-input"
                   style={{ paddingLeft: '2.75rem' }}
-                  placeholder="John Doe"
-                  value={formData.name}
+                  placeholder="you@example.com"
+                  value={formData.email}
                   onChange={handleChange}
                   disabled={isLoading}
                 />
               </div>
             </div>
 
-            <div>
-              <label className="aurora-label" htmlFor="phone">Phone Number</label>
-              <div style={{ position: 'relative' }}>
-                <div style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--aurora-text-muted)' }}>
-                  <Phone size={18} />
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1.25rem' }}>
+              <div>
+                <label className="aurora-label" htmlFor="password">Password</label>
+                <div style={{ position: 'relative' }}>
+                  <div style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--aurora-text-muted)' }}>
+                    <Lock size={18} />
+                  </div>
+                  <input
+                    type="password"
+                    id="password"
+                    name="password"
+                    className="aurora-input"
+                    style={{ paddingLeft: '2.75rem' }}
+                    placeholder="••••••••"
+                    value={formData.password}
+                    onChange={handleChange}
+                    disabled={isLoading}
+                  />
                 </div>
-                <input
-                  type="tel"
-                  id="phone"
-                  name="phone"
-                  className="aurora-input"
-                  style={{ paddingLeft: '2.75rem' }}
-                  placeholder="+1 (555) 000-0000"
-                  value={formData.phone}
-                  onChange={handleChange}
-                  disabled={isLoading}
-                />
+              </div>
+
+              <div>
+                <label className="aurora-label" htmlFor="confirmPassword">Confirm Password</label>
+                <div style={{ position: 'relative' }}>
+                  <div style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--aurora-text-muted)' }}>
+                    <Lock size={18} />
+                  </div>
+                  <input
+                    type="password"
+                    id="confirmPassword"
+                    name="confirmPassword"
+                    className="aurora-input"
+                    style={{ paddingLeft: '2.75rem' }}
+                    placeholder="••••••••"
+                    value={formData.confirmPassword}
+                    onChange={handleChange}
+                    disabled={isLoading}
+                  />
+                </div>
               </div>
             </div>
-          </div>
 
-          <div>
-            <label className="aurora-label" htmlFor="email">Email Address</label>
-            <div style={{ position: 'relative' }}>
-              <div style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--aurora-text-muted)' }}>
-                <Mail size={18} />
-              </div>
+            <button 
+              type="submit" 
+              className="aurora-btn aurora-btn-primary" 
+              style={{ marginTop: '0.5rem', height: '2.75rem', backgroundColor: 'var(--aurora-success)' }}
+              disabled={isLoading}
+            >
+              {isLoading ? (
+                <>
+                  <Loader2 size={18} className="spin" style={{ animation: 'spin 1s linear infinite' }} />
+                  <span>Sending OTP...</span>
+                </>
+              ) : (
+                <span>Continue</span>
+              )}
+            </button>
+          </form>
+        ) : (
+          /* STEP 2: OTP Verification */
+          <form onSubmit={handleVerifyAndSignup} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+            <div>
+              <label className="aurora-label" htmlFor="otp" style={{ textAlign: 'center' }}>Enter Verification Code</label>
               <input
-                type="email"
-                id="email"
-                name="email"
+                type="text"
+                id="otp"
+                name="otp"
                 className="aurora-input"
-                style={{ paddingLeft: '2.75rem' }}
-                placeholder="you@example.com"
-                value={formData.email}
-                onChange={handleChange}
+                style={{ textAlign: 'center', fontSize: '1.5rem', letterSpacing: '0.5rem', padding: '1rem' }}
+                placeholder="123456"
+                maxLength="6"
+                value={otp}
+                onChange={(e) => {
+                  setOtp(e.target.value.replace(/[^0-9]/g, ''));
+                  if (error) setError('');
+                }}
                 disabled={isLoading}
+                autoFocus
               />
             </div>
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1.25rem' }}>
-            <div>
-              <label className="aurora-label" htmlFor="password">Password</label>
-              <div style={{ position: 'relative' }}>
-                <div style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--aurora-text-muted)' }}>
-                  <Lock size={18} />
-                </div>
-                <input
-                  type="password"
-                  id="password"
-                  name="password"
-                  className="aurora-input"
-                  style={{ paddingLeft: '2.75rem' }}
-                  placeholder="••••••••"
-                  value={formData.password}
-                  onChange={handleChange}
-                  disabled={isLoading}
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="aurora-label" htmlFor="confirmPassword">Confirm Password</label>
-              <div style={{ position: 'relative' }}>
-                <div style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--aurora-text-muted)' }}>
-                  <Lock size={18} />
-                </div>
-                <input
-                  type="password"
-                  id="confirmPassword"
-                  name="confirmPassword"
-                  className="aurora-input"
-                  style={{ paddingLeft: '2.75rem' }}
-                  placeholder="••••••••"
-                  value={formData.confirmPassword}
-                  onChange={handleChange}
-                  disabled={isLoading}
-                />
-              </div>
-            </div>
-          </div>
-
-          <button 
-            type="submit" 
-            className="aurora-btn aurora-btn-primary" 
-            style={{ marginTop: '0.5rem', height: '2.75rem', backgroundColor: 'var(--aurora-success)' }}
-            disabled={isLoading}
-          >
-            {isLoading ? (
-              <>
-                <Loader2 size={18} className="spin" style={{ animation: 'spin 1s linear infinite' }} />
-                <span>Creating Account...</span>
-              </>
-            ) : (
-              <span>Sign Up</span>
-            )}
-          </button>
-        </form>
+            
+            <button 
+              type="submit" 
+              className="aurora-btn aurora-btn-primary" 
+              style={{ marginTop: '0.5rem', height: '3rem', backgroundColor: 'var(--aurora-primary)' }}
+              disabled={isLoading || otp.length < 6}
+            >
+              {isLoading ? (
+                <>
+                  <Loader2 size={18} className="spin" style={{ animation: 'spin 1s linear infinite' }} />
+                  <span>Verifying...</span>
+                </>
+              ) : (
+                <span>Verify & Create Account</span>
+              )}
+            </button>
+          </form>
+        )}
 
         <div style={{ 
           textAlign: 'center', 

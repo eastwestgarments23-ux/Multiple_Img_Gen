@@ -1,12 +1,13 @@
 import { useState, useEffect } from 'react';
 import { Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 
-// Modular Components (To be created in upcoming steps)
+// Modular Components
 import Navbar from './components/Navbar.jsx';
 import Login from './pages/Login.jsx';
 import Signup from './pages/Signup.jsx';
 import Profile from './pages/Profile.jsx';
 import Generator from './pages/Generator.jsx';
+import ApiKeyGuide from './pages/ApiKeyGuide.jsx';
 
 // Security: Protected Route Wrapper
 const ProtectedRoute = ({ user, children }) => {
@@ -83,6 +84,14 @@ function App() {
             element={
               <ProtectedRoute user={user}>
                 <Profile user={user} />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/api-key-guide"
+            element={
+              <ProtectedRoute user={user}>
+                <ApiKeyGuide />
               </ProtectedRoute>
             }
           />

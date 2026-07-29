@@ -12,26 +12,51 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-aurora-key-change-in-prod';
 
+// Database API Key Encryption Configuration
+const ENCRYPTION_KEY = process.env.ENCRYPTION_SECRET 
+  ? crypto.scryptSync(process.env.ENCRYPTION_SECRET, 'salt', 32) 
+  : crypto.scryptSync('fallback-secret-change-me', 'salt', 32); 
+const IV_LENGTH = 16;
+
 app.use(cors());
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ limit: '100mb', extended: true }));
 
-// Tier Configurations
-const TIER_LIMITS = {
-    'free': 10,
-    'pro': 50,
-    'elite': 100
-};
-
-const TIER_PRICING = {
-    'pro': 999,   // ₹999
-    'elite': 2499 // ₹2499
+// Token Packages & Pricing
+// Base Cost: 1 Token = ₹20
+const TOKEN_PACKAGES = {
+    '100': 2000,  // 100 * 20 = ₹2,000 (0% discount)
+    '500': 8000,  // 500 * 20 = ₹10,000 -> 20% discount = ₹8,000
+    '1000': 14000 // 1000 * 20 = ₹20,000 -> 30% discount = ₹14,000
 };
 
 const razorpayInstance = new Razorpay({
     key_id: process.env.RAZORPAY_KEY_ID,
     key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
+
+// ==========================================
+// UTILITIES: ENCRYPTION
+// ==========================================
+function encrypt(text) {
+    if (!text) return null;
+    let iv = crypto.randomBytes(IV_LENGTH);
+    let cipher = crypto.createCipheriv('aes-256-cbc', ENCRYPTION_KEY, iv);
+    let encrypted = cipher.update(text);
+    encrypted = Buffer.concat([encrypted, cipher.final()]);
+    return iv.toString('hex') + ':' + encrypted.toString('hex');
+}
+
+function decrypt(text) {
+    if (!text) return null;
+    let textParts = text.split(':');
+    let iv = Buffer.from(textParts.shift(), 'hex');
+    let encryptedText = Buffer.from(textParts.join(':'), 'hex');
+    let decipher = crypto.createDecipheriv('aes-256-cbc', ENCRYPTION_KEY, iv);
+    let decrypted = decipher.update(encryptedText);
+    decrypted = Buffer.concat([decrypted, decipher.final()]);
+    return decrypted.toString();
+}
 
 // ==========================================
 // MySQL DATABASE SETUP
@@ -92,10 +117,16 @@ async function initDB() {
             await connection.query(`ALTER TABLE generated_images ADD COLUMN user_id INT NOT NULL DEFAULT 1 AFTER id`);
         }
 
-        const [userCols] = await connection.query(`SHOW COLUMNS FROM users LIKE 'tier'`);
-        if (userCols.length === 0) {
-            console.log("⚙️ Migrating database: Adding 'tier' column to users table...");
-            await connection.query(`ALTER TABLE users ADD COLUMN tier VARCHAR(20) DEFAULT 'free' AFTER password_hash`);
+        const [tokensCol] = await connection.query(`SHOW COLUMNS FROM users LIKE 'tokens'`);
+        if (tokensCol.length === 0) {
+            console.log("⚙️ Migrating database: Adding 'tokens' column...");
+            await connection.query(`ALTER TABLE users ADD COLUMN tokens INT DEFAULT 10 AFTER password_hash`);
+        }
+
+        const [apiKeyCol] = await connection.query(`SHOW COLUMNS FROM users LIKE 'api_key'`);
+        if (apiKeyCol.length === 0) {
+            console.log("⚙️ Migrating database: Adding 'api_key' column...");
+            await connection.query(`ALTER TABLE users ADD COLUMN api_key TEXT DEFAULT NULL AFTER tokens`);
         }
         
         connection.release();
@@ -131,11 +162,12 @@ app.post('/api/signup', async (req, res) => {
         const { name, email, phone, password } = req.body;
         if (!name || !email || !phone || !password) return res.status(400).json({ error: "All fields are required." });
 
-        const [existing] = await pool.query(`SELECT id FROM users WHERE email = ?`, [email]);
-        if (existing.length > 0) return res.status(409).json({ error: "Email already exists." });
+        const [existing] = await pool.query(`SELECT id FROM users WHERE email = ? OR phone = ?`, [email, phone]);
+        if (existing.length > 0) return res.status(409).json({ error: "Email or Phone already exists." });
 
         const hash = await bcrypt.hash(password, 10);
-        await pool.query(`INSERT INTO users (name, email, phone, password_hash) VALUES (?, ?, ?, ?)`, [name, email, phone, hash]);
+        // Grant 10 free tokens on sign up
+        await pool.query(`INSERT INTO users (name, email, phone, password_hash, tokens) VALUES (?, ?, ?, ?, ?)`, [name, email, phone, hash, 10]);
         res.status(201).json({ success: true, message: "Account created." });
     } catch (err) {
         res.status(500).json({ error: "Registration failed." });
@@ -153,7 +185,7 @@ app.post('/api/login', async (req, res) => {
         }
 
         const token = jwt.sign({ id: user.id, email: user.email, name: user.name }, JWT_SECRET, { expiresIn: '24h' });
-        res.json({ success: true, token, user: { id: user.id, name: user.name, email: user.email, phone: user.phone, tier: user.tier } });
+        res.json({ success: true, token, user: { id: user.id, name: user.name, email: user.email, phone: user.phone, tokens: user.tokens } });
     } catch (err) {
         res.status(500).json({ error: "Login failed." });
     }
@@ -164,10 +196,10 @@ app.post('/api/login', async (req, res) => {
 // ==========================================
 app.post('/api/create-payment', authenticateToken, async (req, res) => {
     try {
-        const { targetTier } = req.body;
-        if (!TIER_PRICING[targetTier]) return res.status(400).json({ error: "Invalid tier." });
+        const { packageId } = req.body; // e.g., '100', '500', '1000'
+        if (!TOKEN_PACKAGES[packageId]) return res.status(400).json({ error: "Invalid token package selected." });
 
-        const amount = TIER_PRICING[targetTier] * 100; // Razorpay expects paise
+        const amount = TOKEN_PACKAGES[packageId] * 100; // Razorpay expects paise
 
         const order = await razorpayInstance.orders.create({
             amount,
@@ -184,15 +216,17 @@ app.post('/api/create-payment', authenticateToken, async (req, res) => {
 
 app.post('/api/verify-payment', authenticateToken, async (req, res) => {
     try {
-        const { razorpay_order_id, razorpay_payment_id, razorpay_signature, targetTier } = req.body;
+        const { razorpay_order_id, razorpay_payment_id, razorpay_signature, packageId } = req.body;
+        const packageTokens = parseInt(packageId, 10);
         
+        if (!TOKEN_PACKAGES[packageId]) return res.status(400).json({ error: "Invalid package data." });
+
         const text = `${razorpay_order_id}|${razorpay_payment_id}`;
         const expectedSignature = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET).update(text).digest('hex');
         
         if (expectedSignature === razorpay_signature) {
-            // Upgrade User
-            await pool.query(`UPDATE users SET tier = ? WHERE id = ?`, [targetTier, req.user.id]);
-            res.json({ success: true, message: "Payment verified. Tier upgraded!" });
+            await pool.query(`UPDATE users SET tokens = tokens + ? WHERE id = ?`, [packageTokens, req.user.id]);
+            res.json({ success: true, message: `Payment verified. ${packageTokens} tokens added!` });
         } else {
             res.status(400).json({ error: "Invalid signature." });
         }
@@ -202,37 +236,58 @@ app.post('/api/verify-payment', authenticateToken, async (req, res) => {
 });
 
 // ==========================================
+// API KEY MANAGEMENT
+// ==========================================
+app.post('/api/save-api-key', authenticateToken, async (req, res) => {
+    try {
+        const { apiKey } = req.body;
+        if (!apiKey || apiKey.trim() === '') {
+            await pool.query(`UPDATE users SET api_key = NULL WHERE id = ?`, [req.user.id]);
+            return res.json({ success: true, message: "API key removed." });
+        }
+        const encryptedKey = encrypt(apiKey.trim());
+        await pool.query(`UPDATE users SET api_key = ? WHERE id = ?`, [encryptedKey, req.user.id]);
+        res.json({ success: true, message: "API key securely saved." });
+    } catch (err) {
+        res.status(500).json({ error: "Failed to save API key." });
+    }
+});
+
+// ==========================================
 // IMAGE GENERATION ENDPOINT
 // ==========================================
 app.post('/api/generate-pose', authenticateToken, async (req, res) => {
+    let connection;
     try {
         const userId = req.user.id;
         
-        // 1. Get User Tier & Current Usage
-        const [userRows] = await pool.query(`SELECT tier FROM users WHERE id = ?`, [userId]);
-        const userTier = userRows[0]?.tier || 'free';
-        const limit = TIER_LIMITS[userTier];
+        // Use a transaction to ensure tokens are securely handled
+        connection = await pool.getConnection();
+        await connection.beginTransaction();
 
-        const [usageRows] = await pool.query(
-            `SELECT COUNT(*) as count FROM generated_images WHERE user_id = ? AND DATE(created_at) = CURDATE()`,
-            [userId]
-        );
-        const generatedToday = usageRows[0].count;
+        const [userRows] = await connection.query(`SELECT tokens, api_key FROM users WHERE id = ? FOR UPDATE`, [userId]);
+        const user = userRows[0];
         
-        if (generatedToday >= limit) {
-            return res.status(429).json({ 
-                error: "LIMIT_REACHED", 
-                message: `You have reached your ${userTier} tier limit of ${limit} images/day.`,
-                currentTier: userTier 
-            });
+        if (!user || user.tokens < 1) {
+            await connection.rollback();
+            return res.status(402).json({ error: "INSUFFICIENT_TOKENS", message: "You have run out of tokens. Please recharge your account." });
         }
 
-        const { base64Image, mimeType, poseBase64, poseMimeType, modelId, poseId, ethnicity, sourceName } = req.body;
-        if (!base64Image) return res.status(400).json({ error: "Missing required product image." });
+        if (!user.api_key) {
+            await connection.rollback();
+            return res.status(403).json({ error: "MISSING_API_KEY", message: "You must add your own Google Gemini API key to generate images." });
+        }
 
-        const apiKey = process.env.GEMINI_API_KEY;
-        const modelName = "gemini-3.1-flash-image-preview"; // Example model name, adjust as needed
-        const geminiApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
+        const userApiKey = decrypt(user.api_key);
+
+        const { base64Image, mimeType, poseBase64, poseMimeType, modelId, poseId, ethnicity, sourceName } = req.body;
+        if (!base64Image) {
+            await connection.rollback();
+            return res.status(400).json({ error: "Missing required product image." });
+        }
+
+        const modelName = "gemini-3.1-flash-image-preview"; // Google's image model
+        const geminiApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${userApiKey}`;
 
         const contextualAiPrompt = `You are a professional Virtual Try-On fashion AI. 
         CRITICAL INSTRUCTIONS:
@@ -255,15 +310,12 @@ app.post('/api/generate-pose', authenticateToken, async (req, res) => {
             requestParts.push({ inlineData: { mimeType: poseMimeType || 'image/jpeg', data: poseBase64 } });
         }
 
-        // AUTO-RETRY LOGIC (Max 3 attempts)
         let extractedBase64String = null;
         let extractedMimeType = 'image/jpeg';
         let lastError = null;
 
         for (let attempt = 1; attempt <= 3; attempt++) {
             try {
-                console.log(`[Attempt ${attempt}/3] Gemini API: User[${userId}] Model[${modelId}] Pose[${poseId}]`);
-                
                 const apiResponse = await fetch(geminiApiUrl, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -282,12 +334,14 @@ app.post('/api/generate-pose', authenticateToken, async (req, res) => {
                 const outputPayloadJson = await apiResponse.json();
 
                 if (!apiResponse.ok) {
+                    if (apiResponse.status === 400 && outputPayloadJson.error?.message?.includes("API key not valid")) {
+                        throw new Error("INVALID_API_KEY");
+                    }
                     throw new Error(outputPayloadJson.error?.message || `API Status: ${apiResponse.statusText}`);
                 }
 
                 const candidate = outputPayloadJson.candidates?.[0];
                 if (candidate?.finishReason && candidate.finishReason !== 'STOP') {
-                    // Safety blocks shouldn't be retried, they will just fail again
                     throw new Error(`SAFETY_BLOCK: AI Refused (Reason: ${candidate.finishReason})`);
                 }
 
@@ -300,46 +354,54 @@ app.post('/api/generate-pose', authenticateToken, async (req, res) => {
                     }
                 }
 
-                if (extractedBase64String) {
-                    break; // Success! Break out of the retry loop
-                } else {
-                    throw new Error("Empty image payload received from Google.");
-                }
+                if (extractedBase64String) break;
+                else throw new Error("Empty image payload received from Google.");
 
             } catch (attemptErr) {
                 lastError = attemptErr;
-                if (attemptErr.message.includes("SAFETY_BLOCK")) break; // Don't retry safety blocks
-                if (attempt < 3) await sleep(2000); // Wait 2s before retry
+                if (attemptErr.message === "INVALID_API_KEY" || attemptErr.message.includes("SAFETY_BLOCK")) break;
+                if (attempt < 3) await sleep(2000); 
             }
         }
 
         if (!extractedBase64String) {
-            console.error(`Pipeline Failed after retries:`, lastError?.message);
+            await connection.rollback();
+            if (lastError?.message === "INVALID_API_KEY") {
+                return res.status(401).json({ error: "Your Google Gemini API Key is invalid or expired. Please update it in your profile." });
+            }
             throw new Error(lastError?.message || "Engine failed to generate image after multiple attempts.");
         }
+
+        // Deduct 1 Token on success
+        await connection.query(`UPDATE users SET tokens = tokens - 1 WHERE id = ?`, [userId]);
 
         const dynamicParentFolder = `Model_${modelId}_${sourceName || 'Unknown'}`;
         const outputFileName = `User_${userId}_Model_${modelId}_Pose_${poseId}_${Date.now()}.png`;
 
-        await pool.query(
+        await connection.query(
             `INSERT INTO generated_images (user_id, parent_folder, file_name, mime_type, image_base64) VALUES (?, ?, ?, ?, ?)`,
             [userId, dynamicParentFolder, outputFileName, extractedMimeType, extractedBase64String]
         );
+
+        await connection.commit();
 
         return res.json({
             success: true,
             image_base64: extractedBase64String,
             mime_type: extractedMimeType,
-            generations_remaining: limit - (generatedToday + 1)
+            tokens_remaining: user.tokens - 1
         });
 
     } catch (routeExecutionError) {
+        if (connection) await connection.rollback();
         return res.status(500).json({ error: routeExecutionError.message || "Server failed to process image generation." });
+    } finally {
+        if (connection) connection.release();
     }
 });
 
 // ==========================================
-// USER GALLERY ENDPOINT (With Pagination)
+// USER GALLERY ENDPOINT 
 // ==========================================
 app.get('/api/gallery', authenticateToken, async (req, res) => {
     try {
@@ -348,11 +410,10 @@ app.get('/api/gallery', authenticateToken, async (req, res) => {
         const limit = 10;
         const offset = (page - 1) * limit;
 
-        // Cap at 5 pages max (50 items)
         if (page > 5) return res.json({ success: true, count: 0, data: [], totalPages: 5 });
 
         const [totalRows] = await pool.query(`SELECT COUNT(*) as count FROM generated_images WHERE user_id = ?`, [userId]);
-        const totalItems = Math.min(totalRows[0].count, 50); // Cap absolute total to 50 for pagination logic
+        const totalItems = Math.min(totalRows[0].count, 50); 
         const totalPages = Math.ceil(totalItems / limit);
 
         const [rows] = await pool.query(
@@ -373,24 +434,21 @@ app.get('/api/profile', authenticateToken, async (req, res) => {
     try {
         const userId = req.user.id;
         
-        const [users] = await pool.query(`SELECT id, name, email, phone, tier, created_at FROM users WHERE id = ?`, [userId]);
+        const [users] = await pool.query(`SELECT id, name, email, phone, tokens, api_key, created_at FROM users WHERE id = ?`, [userId]);
         if (users.length === 0) return res.status(404).json({ error: "User not found." });
 
-        const userTier = users[0].tier || 'free';
-        const limit = TIER_LIMITS[userTier];
-
-        const [usageRows] = await pool.query(
-            `SELECT COUNT(*) as count FROM generated_images WHERE user_id = ? AND DATE(created_at) = CURDATE()`,
-            [userId]
-        );
-
+        const userData = users[0];
+        
         res.json({
             success: true,
-            user: users[0],
-            usage: {
-                today: usageRows[0].count,
-                limit: limit,
-                remaining: Math.max(0, limit - usageRows[0].count)
+            user: {
+                id: userData.id,
+                name: userData.name,
+                email: userData.email,
+                phone: userData.phone,
+                tokens: userData.tokens,
+                hasApiKey: !!userData.api_key,
+                created_at: userData.created_at
             }
         });
     } catch (err) {

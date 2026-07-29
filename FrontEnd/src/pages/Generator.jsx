@@ -1,4 +1,5 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
+import { Link } from "react-router-dom";
 import {
   Upload,
   Image as ImageIcon,
@@ -9,7 +10,9 @@ import {
   Package,
   AlertCircle,
   Zap,
-  ArrowUpRight,
+  Coins,
+  Key,
+  Mail
 } from "lucide-react";
 import JSZip from "jszip";
 
@@ -126,26 +129,53 @@ const AVAILABLE_MODELS = [
   },
 ];
 
-const TIERS = {
-  free: { next: "pro", name: "Pro", price: "₹999", limit: 50 },
-  pro: { next: "elite", name: "Elite", price: "₹2499", limit: 200 },
-  elite: { next: null },
-};
+// Token Economy Configuration
+const TOKEN_PACKAGES = [
+  { id: "100", name: "100 Tokens", price: "₹2,000", discount: "" },
+  { id: "500", name: "500 Tokens", price: "₹8,000", discount: "20% OFF" },
+  { id: "1000", name: "1,000 Tokens", price: "₹14,000", discount: "30% OFF" }
+];
 
 export default function Generator({ user }) {
+  // Application Data State
+  const [profileData, setProfileData] = useState(null);
+  
+  // Input State
   const [productImages, setProductImages] = useState([]);
+  const [customModel, setCustomModel] = useState(null);
   const [ethnicityFilter, setEthnicityFilter] = useState("all");
   const [selectedModelId, setSelectedModelId] = useState(null);
+  
+  // Generation Process State
   const [generationResults, setGenerationResults] = useState([]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [globalError, setGlobalError] = useState("");
 
-  // Rate Limit & Upgrade State
-  const [limitData, setLimitData] = useState(null);
+  // System States
+  const [showTokenShop, setShowTokenShop] = useState(false);
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
-
   const [brokenModels, setBrokenModels] = useState(new Set());
+  
+  // Refs
   const fileInputRef = useRef(null);
+  const customModelInputRef = useRef(null);
+
+  // Fetch real-time API Key & Token status
+  useEffect(() => {
+    fetchProfileData();
+  }, []);
+
+  const fetchProfileData = async () => {
+    try {
+      const token = localStorage.getItem("aurora_token");
+      if (!token) return;
+      const res = await fetch("/api/profile", { headers: { Authorization: `Bearer ${token}` } });
+      const data = await res.json();
+      if (res.ok) setProfileData(data.user);
+    } catch (err) {
+      console.error("Failed to fetch profile", err);
+    }
+  };
 
   // ==========================================
   // INPUT HANDLING & UTILITIES
@@ -175,6 +205,50 @@ export default function Generator({ user }) {
 
   const removeProductImage = (idToRemove) =>
     setProductImages((prev) => prev.filter((img) => img.id !== idToRemove));
+
+  // Custom Model Upload Handler (Up to 4 images)
+  const handleCustomModelUpload = (e) => {
+    const files = Array.from(e.target.files).slice(0, 4); // Strict limit 4
+    if (files.length === 0) return;
+    
+    if (files.length > 4) {
+        alert("You can only upload up to 4 images for a custom model array. Only the first 4 will be used.");
+    }
+
+    const poses = [];
+    let loadedCount = 0;
+
+    files.forEach((file, index) => {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        poses.push({
+          id: `c${index + 1}`,
+          src: event.target.result,
+          base64Data: event.target.result.split(",")[1]
+        });
+        
+        loadedCount++;
+        if (loadedCount === files.length) {
+          setCustomModel({
+            id: "custom",
+            ethnicity: "custom",
+            name: "Your Custom Model Array",
+            poses: poses
+          });
+          setSelectedModelId("custom");
+          setEthnicityFilter("all");
+        }
+      };
+      reader.readAsDataURL(file);
+    });
+    if (customModelInputRef.current) customModelInputRef.current.value = "";
+  };
+
+  const removeCustomModel = (e) => {
+      e.stopPropagation();
+      setCustomModel(null);
+      if (selectedModelId === "custom") setSelectedModelId(null);
+  };
 
   const handleImageError = (modelId) => {
     setBrokenModels((prev) => new Set(prev).add(modelId));
@@ -214,19 +288,24 @@ export default function Generator({ user }) {
   // GENERATION ENGINE
   // ==========================================
   const handleGenerate = async () => {
-    if (productImages.length === 0)
-      return setGlobalError("Please upload at least one product image.");
+    if (productImages.length === 0) return setGlobalError("Please upload at least one product image.");
     if (!selectedModelId) return setGlobalError("Please select a Model Array.");
+    if (profileData && !profileData.hasApiKey) {
+        return setGlobalError("You must configure your API Key in your profile before generating.");
+    }
 
     setGlobalError("");
-    setLimitData(null);
+    setShowTokenShop(false);
     setIsGenerating(true);
     setGenerationResults([]);
 
     const token = localStorage.getItem("aurora_token");
-    const targetModel = AVAILABLE_MODELS.find((m) => m.id === selectedModelId);
+    
+    // Determine Target Model
+    const allModels = customModel ? [customModel, ...AVAILABLE_MODELS] : AVAILABLE_MODELS;
+    const targetModel = allModels.find((m) => m.id === selectedModelId);
+    
     let matrixState = [];
-
     productImages.forEach((prodImg) => {
       targetModel.poses.forEach((pose) => {
         matrixState.push({
@@ -254,7 +333,9 @@ export default function Generator({ user }) {
         const uid = `${prodImg.id}-${pose.id}`;
 
         try {
-          const poseBase64Data = await getBase64FromUrl(pose.src);
+          // If custom model, use the pre-extracted base64, otherwise fetch from URL
+          const poseBase64Data = pose.base64Data || await getBase64FromUrl(pose.src);
+          
           const response = await fetch("/api/generate-pose", {
             method: "POST",
             headers: {
@@ -276,52 +357,38 @@ export default function Generator({ user }) {
           const data = await response.json();
 
           if (!response.ok) {
-            // DETECT RATE LIMIT
-            if (data.error === "LIMIT_REACHED") {
-              setLimitData({
-                currentTier: data.currentTier || "free",
-                message: data.message,
-              });
+            if (data.error === "INSUFFICIENT_TOKENS") {
+              setShowTokenShop(true);
+              setGlobalError("You have run out of tokens. Please recharge to continue.");
               haltExecution = true;
               throw new Error("Quota Exceeded");
+            }
+            if (data.error === "MISSING_API_KEY") {
+              haltExecution = true;
+              throw new Error("API Key Missing");
             }
             throw new Error(data.error || "Generation failed.");
           }
 
-          const imageBlob = convertBase64ToBlob(
-            data.image_base64,
-            data.mime_type,
-          );
+          // Update local token count state visually
+          if (data.tokens_remaining !== undefined) {
+             setProfileData(prev => ({...prev, tokens: data.tokens_remaining}));
+          }
+
+          const imageBlob = convertBase64ToBlob(data.image_base64, data.mime_type);
           const blobUrl = URL.createObjectURL(imageBlob);
 
           setGenerationResults((prev) =>
-            prev.map((res) =>
-              res.uid === uid
-                ? { ...res, status: "success", blobUrl, blob: imageBlob }
-                : res,
-            ),
+            prev.map((res) => res.uid === uid ? { ...res, status: "success", blobUrl, blob: imageBlob } : res)
           );
         } catch (err) {
-          if (err.message !== "Quota Exceeded") {
+          if (err.message !== "Quota Exceeded" && err.message !== "API Key Missing") {
             setGenerationResults((prev) =>
-              prev.map((res) =>
-                res.uid === uid
-                  ? { ...res, status: "error", errorMsg: err.message }
-                  : res,
-              ),
+              prev.map((res) => res.uid === uid ? { ...res, status: "error", errorMsg: err.message } : res)
             );
           } else {
-            // Mark all remaining loading states as cancelled
             setGenerationResults((prev) =>
-              prev.map((res) =>
-                res.status === "loading"
-                  ? {
-                      ...res,
-                      status: "error",
-                      errorMsg: "Cancelled due to limit",
-                    }
-                  : res,
-              ),
+              prev.map((res) => res.status === "loading" ? { ...res, status: "error", errorMsg: "Cancelled: " + err.message } : res)
             );
           }
         }
@@ -331,35 +398,32 @@ export default function Generator({ user }) {
   };
 
   // ==========================================
-  // RAZORPAY CHECKOUT FLOW
+  // RAZORPAY TOKEN CHECKOUT FLOW
   // ==========================================
-  const handleUpgrade = async (targetTier) => {
+  const handleTokenPurchase = async (packageId) => {
     setIsProcessingPayment(true);
     const token = localStorage.getItem("aurora_token");
 
     try {
-      // 1. Create Order on Backend
       const orderRes = await fetch("/api/create-payment", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ targetTier }),
+        body: JSON.stringify({ packageId }),
       });
       const orderData = await orderRes.json();
       if (!orderRes.ok) throw new Error(orderData.error);
 
-      // 2. Initialize Razorpay UI
       const options = {
         key: orderData.keyId,
         amount: orderData.order.amount,
         currency: orderData.order.currency,
         name: "Aurora Generator",
-        description: `Upgrade to ${targetTier.toUpperCase()} Tier`,
+        description: `Purchase ${packageId} Tokens`,
         order_id: orderData.order.id,
         handler: async function (response) {
-          // 3. Verify Payment on Backend
           const verifyRes = await fetch("/api/verify-payment", {
             method: "POST",
             headers: {
@@ -370,16 +434,14 @@ export default function Generator({ user }) {
               razorpay_order_id: response.razorpay_order_id,
               razorpay_payment_id: response.razorpay_payment_id,
               razorpay_signature: response.razorpay_signature,
-              targetTier,
+              packageId,
             }),
           });
 
           if (verifyRes.ok) {
-            alert(
-              "Payment Successful! Your tier has been upgraded. Please try generating again.",
-            );
-            setLimitData(null); // Clear the banner
-            // Optional: Update local user state if needed
+            alert(`Payment Successful! Tokens have been added.`);
+            setShowTokenShop(false);
+            fetchProfileData(); // Refresh token count
           } else {
             alert("Payment verification failed. Please contact support.");
           }
@@ -404,23 +466,16 @@ export default function Generator({ user }) {
   // ZIP DOWNLOAD HANDLERS
   // ==========================================
   const downloadArrayZip = async (productId, productName) => {
-    const arrayResults = generationResults.filter(
-      (r) => r.productId === productId && r.status === "success",
-    );
+    const arrayResults = generationResults.filter((r) => r.productId === productId && r.status === "success");
     if (arrayResults.length === 0) return;
     const zip = new JSZip();
     arrayResults.forEach((res) => zip.file(res.filename, res.blob));
     const content = await zip.generateAsync({ type: "blob" });
-    triggerDownload(
-      URL.createObjectURL(content),
-      `Model_${selectedModelId}_${productName}_Array.zip`,
-    );
+    triggerDownload(URL.createObjectURL(content), `Model_${selectedModelId}_${productName}_Array.zip`);
   };
 
   const downloadMasterZip = async () => {
-    const successfulResults = generationResults.filter(
-      (r) => r.status === "success",
-    );
+    const successfulResults = generationResults.filter((r) => r.status === "success");
     if (successfulResults.length === 0) return;
     const zip = new JSZip();
     successfulResults.forEach((res) => {
@@ -428,154 +483,99 @@ export default function Generator({ user }) {
       folder.file(res.filename, res.blob);
     });
     const content = await zip.generateAsync({ type: "blob" });
-    triggerDownload(
-      URL.createObjectURL(content),
-      `Aurora_Generated_Matrix.zip`,
-    );
+    triggerDownload(URL.createObjectURL(content), `Aurora_Generated_Matrix.zip`);
   };
 
-  const displayModels = AVAILABLE_MODELS.filter(
-    (m) =>
-      (ethnicityFilter === "all" || m.ethnicity === ethnicityFilter) &&
-      !brokenModels.has(m.id),
+  // Combine custom model with static models for display
+  const allModels = customModel ? [customModel, ...AVAILABLE_MODELS] : AVAILABLE_MODELS;
+  const displayModels = allModels.filter(
+    (m) => (ethnicityFilter === "all" || m.ethnicity === ethnicityFilter || m.id === "custom") && !brokenModels.has(m.id)
   );
 
   return (
-    <div
-      style={{
-        padding: "3rem 5%",
-        maxWidth: "1400px",
-        margin: "0 auto",
-        width: "100%",
-      }}
-    >
-      {/* UPGRADE BANNER (Triggers when Limit Hit) */}
-      {limitData && TIERS[limitData.currentTier]?.next && (
-        <div
-          style={{
-            background: "linear-gradient(135deg, #1e1b4b 0%, #4338ca 100%)",
-            borderRadius: "var(--radius-lg)",
-            padding: "2rem",
-            marginBottom: "2rem",
-            color: "white",
-            display: "flex",
-            flexWrap: "wrap",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: "2rem",
-            boxShadow: "0 20px 25px -5px rgba(67, 56, 202, 0.3)",
-          }}
-        >
-          <div style={{ flex: "1 1 300px" }}>
-            <div
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: "0.5rem",
-                background: "rgba(255,255,255,0.2)",
-                padding: "0.25rem 0.75rem",
-                borderRadius: "var(--radius-full)",
-                fontSize: "0.85rem",
-                fontWeight: 600,
-                marginBottom: "1rem",
-              }}
-            >
-              <AlertCircle size={16} /> Daily Limit Reached
-            </div>
-            <h2
-              style={{
-                fontSize: "1.75rem",
-                fontWeight: 700,
-                margin: "0 0 0.5rem 0",
-              }}
-            >
-              Upgrade to {TIERS[limitData.currentTier].name}
-            </h2>
-            <p style={{ margin: 0, opacity: 0.9, lineHeight: 1.5 }}>
-              You've hit your {limitData.currentTier} plan limit. Upgrade now to
-              generate up to{" "}
-              <strong>
-                {TIERS[limitData.currentTier].limit} images per day
-              </strong>{" "}
-              and keep your workflow moving without interruption.
+    <div style={{ padding: "3rem 5%", maxWidth: "1400px", margin: "0 auto", width: "100%" }}>
+      
+      {/* System Alerts */}
+      {profileData && !profileData.hasApiKey && (
+        <div style={{
+            background: "#fffbeb", border: "1px solid #fde68a", padding: "1.5rem", borderRadius: "var(--radius-lg)",
+            marginBottom: "2rem", display: "flex", gap: "1rem", alignItems: "flex-start", boxShadow: "var(--shadow-md)"
+        }}>
+          <AlertCircle size={28} color="#b45309" style={{ marginTop: "4px" }} />
+          <div>
+            <h3 style={{ margin: "0 0 0.5rem 0", color: "#b45309", fontSize: "1.25rem" }}>API Key Required</h3>
+            <p style={{ margin: "0 0 1rem 0", color: "#92400e", lineHeight: 1.5 }}>
+              You must supply your own Google Gemini API key to use this generator. You are responsible for your own Cloud API billing.
             </p>
+            <Link to="/profile" className="aurora-btn" style={{ background: "#b45309", color: "white", padding: "0.5rem 1rem", fontSize: "0.95rem" }}>
+              <Key size={16} /> Configure API Key in Profile
+            </Link>
           </div>
-          <button
-            onClick={() => handleUpgrade(TIERS[limitData.currentTier].next)}
-            disabled={isProcessingPayment}
-            className="aurora-btn"
-            style={{
-              background: "white",
-              color: "#4338ca",
-              padding: "1rem 2rem",
-              fontSize: "1.1rem",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {isProcessingPayment ? (
-              <Loader2 className="spin" size={20} />
-            ) : (
-              <Zap size={20} />
-            )}
-            {isProcessingPayment
-              ? "Processing..."
-              : `Upgrade for ${TIERS[limitData.currentTier].price}`}
-          </button>
+        </div>
+      )}
+
+      {/* TOKEN SHOP (Triggers when Limit Hit) */}
+      {showTokenShop && (
+        <div style={{
+            background: "linear-gradient(135deg, #1e1b4b 0%, #4338ca 100%)", borderRadius: "var(--radius-lg)",
+            padding: "2.5rem", marginBottom: "2rem", color: "white", boxShadow: "0 20px 25px -5px rgba(67, 56, 202, 0.4)"
+        }}>
+          <div style={{ textAlign: "center", marginBottom: "2rem" }}>
+            <h2 style={{ fontSize: "2rem", fontWeight: 700, margin: "0 0 0.5rem 0", display: "flex", alignItems: "center", justifyContent: "center", gap: "0.75rem" }}>
+                <Coins size={32} /> Recharge Tokens
+            </h2>
+            <p style={{ opacity: 0.9, fontSize: "1.1rem" }}>1 Token = 1 Generation. Unlock higher discounts with larger packages.</p>
+          </div>
+          
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "1.5rem" }}>
+              {TOKEN_PACKAGES.map(pkg => (
+                  <div key={pkg.id} style={{
+                      background: "rgba(255,255,255,0.1)", border: "1px solid rgba(255,255,255,0.2)",
+                      padding: "1.5rem", borderRadius: "var(--radius-md)", textAlign: "center", backdropFilter: "blur(10px)"
+                  }}>
+                      {pkg.discount && (
+                          <div style={{ background: "var(--aurora-secondary)", color: "white", fontSize: "0.8rem", fontWeight: 700, padding: "0.25rem 0.75rem", borderRadius: "var(--radius-full)", display: "inline-block", marginBottom: "1rem" }}>
+                              {pkg.discount}
+                          </div>
+                      )}
+                      <h3 style={{ fontSize: "1.5rem", margin: "0 0 0.5rem 0" }}>{pkg.name}</h3>
+                      <div style={{ fontSize: "2rem", fontWeight: 700, marginBottom: "1.5rem" }}>{pkg.price}</div>
+                      <button 
+                          onClick={() => handleTokenPurchase(pkg.id)} 
+                          disabled={isProcessingPayment}
+                          className="aurora-btn" 
+                          style={{ width: "100%", background: "white", color: "#4338ca", justifyContent: "center" }}
+                      >
+                          {isProcessingPayment ? <Loader2 size={18} className="spin" /> : <Zap size={18} />}
+                          Buy Now
+                      </button>
+                  </div>
+              ))}
+          </div>
+
+          <div style={{ marginTop: "2rem", textAlign: "center", opacity: 0.8, fontSize: "0.95rem", display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem" }}>
+              <Mail size={16} /> Need a custom token package? Contact us at support@auroragenerator.com
+          </div>
         </div>
       )}
 
       {/* Global Error Banner */}
       {globalError && (
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "0.75rem",
-            background: "#fef2f2",
-            color: "var(--aurora-danger)",
-            padding: "1.25rem",
-            borderRadius: "var(--radius-md)",
-            border: "1px solid #fecaca",
-            marginBottom: "2rem",
-            boxShadow: "var(--shadow-sm)",
-          }}
-        >
+        <div style={{
+            display: "flex", alignItems: "center", gap: "0.75rem", background: "#fef2f2", color: "var(--aurora-danger)",
+            padding: "1.25rem", borderRadius: "var(--radius-md)", border: "1px solid #fecaca", marginBottom: "2rem", boxShadow: "var(--shadow-sm)"
+        }}>
           <AlertCircle size={24} />
-          <span style={{ fontWeight: 600, fontSize: "1.1rem" }}>
-            {globalError}
-          </span>
+          <span style={{ fontWeight: 600, fontSize: "1.1rem" }}>{globalError}</span>
         </div>
       )}
 
       {/* Step 1: Upload */}
-      <div
-        className="glass-panel"
-        style={{
-          padding: "2.5rem",
-          borderRadius: "var(--radius-lg)",
-          marginBottom: "2rem",
-        }}
-      >
-        <h3
-          style={{
-            fontSize: "1.5rem",
-            margin: "0 0 1.5rem 0",
-            display: "flex",
-            alignItems: "center",
-            gap: "0.75rem",
-            color: "var(--aurora-primary)",
-          }}
-        >
+      <div className="glass-panel" style={{ padding: "2.5rem", borderRadius: "var(--radius-lg)", marginBottom: "2rem" }}>
+        <h3 style={{ fontSize: "1.5rem", margin: "0 0 1.5rem 0", display: "flex", alignItems: "center", gap: "0.75rem", color: "var(--aurora-primary)" }}>
           <Upload size={28} /> 1. Upload Product Image(s)
         </h3>
-        <input
-          type="file"
-          multiple
-          accept="image/*"
-          onChange={handleImageUpload}
-          style={{ display: "none" }}
-          ref={fileInputRef}
-        />
+        <input type="file" multiple accept="image/*" onChange={handleImageUpload} style={{ display: "none" }} ref={fileInputRef} />
         <button
           onClick={() => fileInputRef.current?.click()}
           className="aurora-btn aurora-btn-outline"
@@ -585,51 +585,11 @@ export default function Generator({ user }) {
           Select Clothing Images
         </button>
         {productImages.length > 0 && (
-          <div
-            style={{
-              display: "flex",
-              flexWrap: "wrap",
-              gap: "1.5rem",
-              marginTop: "2rem",
-            }}
-          >
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "1.5rem", marginTop: "2rem" }}>
             {productImages.map((img) => (
-              <div
-                key={img.id}
-                style={{
-                  position: "relative",
-                  width: "140px",
-                  height: "140px",
-                  borderRadius: "var(--radius-md)",
-                  overflow: "hidden",
-                  border: "2px solid var(--aurora-border)",
-                  boxShadow: "var(--shadow-sm)",
-                }}
-              >
-                <img
-                  src={img.previewUrl}
-                  alt={img.name}
-                  style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                />
-                <button
-                  onClick={() => removeProductImage(img.id)}
-                  disabled={isGenerating}
-                  style={{
-                    position: "absolute",
-                    top: "6px",
-                    right: "6px",
-                    background: "rgba(0,0,0,0.7)",
-                    color: "white",
-                    border: "none",
-                    borderRadius: "50%",
-                    width: "28px",
-                    height: "28px",
-                    cursor: "pointer",
-                    transition: "background 0.2s",
-                  }}
-                >
-                  ✕
-                </button>
+              <div key={img.id} style={{ position: "relative", width: "140px", height: "140px", borderRadius: "var(--radius-md)", overflow: "hidden", border: "2px solid var(--aurora-border)", boxShadow: "var(--shadow-sm)" }}>
+                <img src={img.previewUrl} alt={img.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                <button onClick={() => removeProductImage(img.id)} disabled={isGenerating} style={{ position: "absolute", top: "6px", right: "6px", background: "rgba(0,0,0,0.7)", color: "white", border: "none", borderRadius: "50%", width: "28px", height: "28px", cursor: "pointer", transition: "background 0.2s" }}>✕</button>
               </div>
             ))}
           </div>
@@ -637,68 +597,53 @@ export default function Generator({ user }) {
       </div>
 
       {/* Step 2: Model Selection */}
-      <div
-        className="glass-panel"
-        style={{
-          padding: "2.5rem",
-          borderRadius: "var(--radius-lg)",
-          marginBottom: "2.5rem",
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            flexWrap: "wrap",
-            gap: "1.5rem",
-            borderBottom: "2px solid var(--aurora-border)",
-            paddingBottom: "1.5rem",
-            marginBottom: "2rem",
-          }}
-        >
-          <h3
-            style={{
-              fontSize: "1.5rem",
-              margin: 0,
-              display: "flex",
-              alignItems: "center",
-              gap: "0.75rem",
-              color: "var(--aurora-primary)",
-            }}
-          >
-            <ImageIcon size={28} /> 2. Choose Model Array
-          </h3>
-          <div
-            style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}
-          >
-            <Filter size={20} style={{ color: "var(--aurora-text-muted)" }} />
-            <select
-              className="aurora-input"
-              style={{
-                width: "auto",
-                padding: "0.75rem 2.5rem 0.75rem 1rem",
-                cursor: "pointer",
-              }}
-              value={ethnicityFilter}
-              onChange={(e) => {
-                setEthnicityFilter(e.target.value);
-                setSelectedModelId(null);
-              }}
-              disabled={isGenerating}
+      <div className="glass-panel" style={{ padding: "2.5rem", borderRadius: "var(--radius-lg)", marginBottom: "2.5rem" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "1.5rem", borderBottom: "2px solid var(--aurora-border)", paddingBottom: "1.5rem", marginBottom: "2rem" }}>
+          <div>
+              <h3 style={{ fontSize: "1.5rem", margin: 0, display: "flex", alignItems: "center", gap: "0.75rem", color: "var(--aurora-primary)" }}>
+                <ImageIcon size={28} /> 2. Choose Model Array
+              </h3>
+              <p style={{ margin: "0.5rem 0 0 0", color: "var(--aurora-text-muted)", fontSize: "0.9rem" }}>Select a pre-built model array or upload your own reference poses (Max 4).</p>
+          </div>
+          
+          <div style={{ display: "flex", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
+            {/* Custom Upload Button */}
+            <input type="file" multiple accept="image/*" onChange={handleCustomModelUpload} style={{ display: "none" }} ref={customModelInputRef} />
+            <button 
+                onClick={() => customModelInputRef.current?.click()}
+                className="aurora-btn aurora-btn-outline" 
+                style={{ padding: "0.75rem 1rem", fontSize: "0.9rem" }}
+                disabled={isGenerating || customModel !== null}
             >
-              <option value="all">All Ethnicities (Show All)</option>
-              <option value="australian">Australian</option>
-              <option value="african">African</option>
-              <option value="malaysian_indonesian">Malaysian/Indonesian</option>
-              <option value="indian">Indian</option>
-              <option value="middle_eastern">Middle Eastern</option>
-              <option value="chinese">Chinese</option>
-              <option value="japanese">Japanese</option>
-              <option value="korean">Korean</option>
-              <option value="european">European</option>
-              <option value="russian">Russian</option>
-            </select>
+                <Upload size={16} /> Upload Custom Array
+            </button>
+
+            {/* Filter */}
+            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <Filter size={20} style={{ color: "var(--aurora-text-muted)" }} />
+                <select
+                className="aurora-input"
+                style={{ width: "auto", padding: "0.75rem 2.5rem 0.75rem 1rem", cursor: "pointer" }}
+                value={ethnicityFilter}
+                onChange={(e) => {
+                    setEthnicityFilter(e.target.value);
+                    setSelectedModelId(null);
+                }}
+                disabled={isGenerating}
+                >
+                <option value="all">All Ethnicities</option>
+                <option value="australian">Australian</option>
+                <option value="african">African</option>
+                <option value="malaysian_indonesian">Malaysian/Indonesian</option>
+                <option value="indian">Indian</option>
+                <option value="middle_eastern">Middle Eastern</option>
+                <option value="chinese">Chinese</option>
+                <option value="japanese">Japanese</option>
+                <option value="korean">Korean</option>
+                <option value="european">European</option>
+                <option value="russian">Russian</option>
+                </select>
+            </div>
           </div>
         </div>
 
@@ -708,88 +653,44 @@ export default function Generator({ user }) {
               key={model.id}
               style={{
                 border: `3px solid ${selectedModelId === model.id ? "var(--aurora-primary)" : "transparent"}`,
-                background:
-                  selectedModelId === model.id
-                    ? "rgba(79, 70, 229, 0.04)"
-                    : "var(--aurora-surface)",
+                background: selectedModelId === model.id ? "rgba(79, 70, 229, 0.04)" : "var(--aurora-surface)",
                 borderRadius: "var(--radius-lg)",
                 padding: "1.5rem",
                 cursor: isGenerating ? "not-allowed" : "pointer",
                 opacity: isGenerating && selectedModelId !== model.id ? 0.4 : 1,
-                boxShadow:
-                  selectedModelId === model.id
-                    ? "var(--shadow-md)"
-                    : "var(--shadow-sm)",
+                boxShadow: selectedModelId === model.id ? "var(--shadow-md)" : "var(--shadow-sm)",
+                position: "relative"
               }}
               onClick={() => !isGenerating && setSelectedModelId(model.id)}
             >
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "1rem",
-                  marginBottom: "1.5rem",
-                }}
-              >
-                <div
-                  style={{
-                    width: "28px",
-                    height: "28px",
-                    borderRadius: "50%",
-                    border: `3px solid ${selectedModelId === model.id ? "var(--aurora-primary)" : "var(--aurora-border)"}`,
-                    background: "white",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                  }}
-                >
-                  {selectedModelId === model.id && (
-                    <div
-                      style={{
-                        width: "14px",
-                        height: "14px",
-                        borderRadius: "50%",
-                        background: "var(--aurora-primary)",
-                      }}
-                    />
-                  )}
+              {model.id === "custom" && !isGenerating && (
+                 <button 
+                    onClick={removeCustomModel}
+                    style={{ position: "absolute", top: "1rem", right: "1rem", background: "#fef2f2", color: "var(--aurora-danger)", border: "1px solid #fecaca", padding: "0.25rem 0.75rem", borderRadius: "var(--radius-sm)", fontSize: "0.8rem", cursor: "pointer", fontWeight: 600 }}
+                 >
+                    Remove Custom Array
+                 </button>
+              )}
+              
+              <div style={{ display: "flex", alignItems: "center", gap: "1rem", marginBottom: "1.5rem" }}>
+                <div style={{ width: "28px", height: "28px", borderRadius: "50%", border: `3px solid ${selectedModelId === model.id ? "var(--aurora-primary)" : "var(--aurora-border)"}`, background: "white", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  {selectedModelId === model.id && <div style={{ width: "14px", height: "14px", borderRadius: "50%", background: "var(--aurora-primary)" }} />}
                 </div>
                 <h4 style={{ margin: 0, fontSize: "1.25rem", fontWeight: 600 }}>
-                  {model.name}
+                  {model.name} {model.id === "custom" && <span style={{fontSize: "0.85rem", color: "var(--aurora-primary)", background: "rgba(79,70,229,0.1)", padding: "0.2rem 0.5rem", borderRadius: "4px", marginLeft: "0.5rem"}}>Your Upload</span>}
                 </h4>
               </div>
+              
               <div style={{ display: "flex", flexWrap: "wrap", gap: "1.5rem" }}>
                 {model.poses.map((pose) => (
-                  <div
-                    key={pose.id}
-                    style={{
-                      display: "flex",
-                      flexDirection: "column",
-                      alignItems: "center",
-                      gap: "0.75rem",
-                    }}
-                  >
+                  <div key={pose.id} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "0.75rem" }}>
                     <img
                       src={pose.src}
                       alt={`Pose ${pose.id}`}
                       onError={() => handleImageError(model.id)}
-                      style={{
-                        width: "130px",
-                        height: "180px",
-                        objectFit: "cover",
-                        borderRadius: "var(--radius-md)",
-                        border: "2px solid var(--aurora-border)",
-                        background: "#fff",
-                        boxShadow: "var(--shadow-sm)",
-                      }}
+                      style={{ width: "130px", height: "180px", objectFit: "cover", borderRadius: "var(--radius-md)", border: "2px solid var(--aurora-border)", background: "#fff", boxShadow: "var(--shadow-sm)" }}
                     />
-                    <span
-                      style={{
-                        fontSize: "0.9rem",
-                        color: "var(--aurora-text-muted)",
-                        fontWeight: 600,
-                      }}
-                    >
+                    <span style={{ fontSize: "0.9rem", color: "var(--aurora-text-muted)", fontWeight: 600 }}>
                       Pose {pose.id}
                     </span>
                   </div>
@@ -803,25 +704,13 @@ export default function Generator({ user }) {
       {/* Step 3: Action Button */}
       <button
         className="aurora-btn aurora-btn-primary"
-        style={{
-          width: "100%",
-          padding: "1.25rem",
-          fontSize: "1.25rem",
-          marginBottom: "2.5rem",
-          borderRadius: "var(--radius-lg)",
-        }}
+        style={{ width: "100%", padding: "1.25rem", fontSize: "1.25rem", marginBottom: "2.5rem", borderRadius: "var(--radius-lg)" }}
         onClick={handleGenerate}
-        disabled={
-          isGenerating || !selectedModelId || productImages.length === 0
-        }
+        disabled={isGenerating || !selectedModelId || productImages.length === 0 || (profileData && !profileData.hasApiKey)}
       >
         {isGenerating ? (
           <>
-            <Loader2
-              size={28}
-              className="spin"
-              style={{ animation: "spin 1s linear infinite" }}
-            />
+            <Loader2 size={28} className="spin" style={{ animation: "spin 1s linear infinite" }} />
             <span>Processing Matrix...</span>
           </>
         ) : (
@@ -834,211 +723,60 @@ export default function Generator({ user }) {
 
       {/* Step 4: Results Matrix */}
       {(generationResults.length > 0 || isGenerating) && (
-        <div
-          className="glass-panel"
-          style={{ padding: "2.5rem", borderRadius: "var(--radius-lg)" }}
-        >
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              marginBottom: "2rem",
-              flexWrap: "wrap",
-              gap: "1.5rem",
-            }}
-          >
-            <h3
-              style={{
-                fontSize: "1.5rem",
-                margin: 0,
-                display: "flex",
-                alignItems: "center",
-                gap: "0.75rem",
-                color: "var(--aurora-primary)",
-              }}
-            >
+        <div className="glass-panel" style={{ padding: "2.5rem", borderRadius: "var(--radius-lg)" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "2rem", flexWrap: "wrap", gap: "1.5rem" }}>
+            <h3 style={{ fontSize: "1.5rem", margin: 0, display: "flex", alignItems: "center", gap: "0.75rem", color: "var(--aurora-primary)" }}>
               <Package size={28} />
               Generated Results
             </h3>
             {generationResults.some((r) => r.status === "success") && (
-              <button
-                onClick={downloadMasterZip}
-                className="aurora-btn aurora-btn-outline"
-                style={{ background: "white", padding: "0.75rem 1.25rem" }}
-              >
+              <button onClick={downloadMasterZip} className="aurora-btn aurora-btn-outline" style={{ background: "white", padding: "0.75rem 1.25rem" }}>
                 📦 Download Master ZIP
               </button>
             )}
           </div>
 
           {productImages.map((prodImg) => {
-            const specificResults = generationResults.filter(
-              (r) => r.productId === prodImg.id,
-            );
+            const specificResults = generationResults.filter((r) => r.productId === prodImg.id);
             if (specificResults.length === 0) return null;
 
             return (
-              <div
-                key={prodImg.id}
-                style={{
-                  marginBottom: "2.5rem",
-                  padding: "2rem",
-                  background: "white",
-                  borderRadius: "var(--radius-lg)",
-                  border: "1px solid var(--aurora-border)",
-                  boxShadow: "var(--shadow-sm)",
-                }}
-              >
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    marginBottom: "2rem",
-                    paddingBottom: "1.5rem",
-                    borderBottom: "2px dashed var(--aurora-border)",
-                  }}
-                >
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "1.25rem",
-                    }}
-                  >
-                    <img
-                      src={prodImg.previewUrl}
-                      style={{
-                        width: "60px",
-                        height: "60px",
-                        borderRadius: "var(--radius-sm)",
-                        objectFit: "cover",
-                        border: "1px solid var(--aurora-border)",
-                      }}
-                    />
+              <div key={prodImg.id} style={{ marginBottom: "2.5rem", padding: "2rem", background: "white", borderRadius: "var(--radius-lg)", border: "1px solid var(--aurora-border)", boxShadow: "var(--shadow-sm)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "2rem", paddingBottom: "1.5rem", borderBottom: "2px dashed var(--aurora-border)" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "1.25rem" }}>
+                    <img src={prodImg.previewUrl} style={{ width: "60px", height: "60px", borderRadius: "var(--radius-sm)", objectFit: "cover", border: "1px solid var(--aurora-border)" }} />
                     <div>
-                      <div
-                        style={{
-                          fontSize: "0.85rem",
-                          color: "var(--aurora-text-muted)",
-                          fontWeight: 700,
-                        }}
-                      >
-                        SOURCE
-                      </div>
-                      <div style={{ fontWeight: 600, fontSize: "1.1rem" }}>
-                        {prodImg.name}
-                      </div>
+                      <div style={{ fontSize: "0.85rem", color: "var(--aurora-text-muted)", fontWeight: 700 }}>SOURCE</div>
+                      <div style={{ fontWeight: 600, fontSize: "1.1rem" }}>{prodImg.name}</div>
                     </div>
                   </div>
                   {specificResults.some((r) => r.status === "success") && (
-                    <button
-                      onClick={() => downloadArrayZip(prodImg.id, prodImg.name)}
-                      className="aurora-btn"
-                      style={{
-                        background: "var(--aurora-text-main)",
-                        color: "white",
-                        padding: "0.6rem 1.25rem",
-                      }}
-                    >
+                    <button onClick={() => downloadArrayZip(prodImg.id, prodImg.name)} className="aurora-btn" style={{ background: "var(--aurora-text-main)", color: "white", padding: "0.6rem 1.25rem" }}>
                       ⬇️ Array .ZIP
                     </button>
                   )}
                 </div>
 
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-                    gap: "1.5rem",
-                  }}
-                >
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "1.5rem" }}>
                   {specificResults.map((res) => (
-                    <div
-                      key={res.uid}
-                      style={{
-                        display: "flex",
-                        flexDirection: "column",
-                        gap: "0.75rem",
-                        padding: "0.75rem",
-                        border: "1px solid var(--aurora-border)",
-                        borderRadius: "var(--radius-md)",
-                        background: "var(--aurora-bg)",
-                      }}
-                    >
-                      <div
-                        style={{
-                          width: "100%",
-                          aspectRatio: "3/4",
-                          background: "#e2e8f0",
-                          borderRadius: "var(--radius-sm)",
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          overflow: "hidden",
-                          position: "relative",
-                        }}
-                      >
+                    <div key={res.uid} style={{ display: "flex", flexDirection: "column", gap: "0.75rem", padding: "0.75rem", border: "1px solid var(--aurora-border)", borderRadius: "var(--radius-md)", background: "var(--aurora-bg)" }}>
+                      <div style={{ width: "100%", aspectRatio: "3/4", background: "#e2e8f0", borderRadius: "var(--radius-sm)", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", position: "relative" }}>
                         {res.status === "loading" && (
-                          <div
-                            style={{
-                              textAlign: "center",
-                              color: "var(--aurora-text-muted)",
-                            }}
-                          >
-                            <Loader2
-                              size={32}
-                              style={{
-                                animation: "spin 1s linear infinite",
-                                margin: "0 auto 0.75rem",
-                              }}
-                            />
-                            <div
-                              style={{ fontSize: "0.9rem", fontWeight: 600 }}
-                            >
-                              Pose {res.poseId}
-                            </div>
+                          <div style={{ textAlign: "center", color: "var(--aurora-text-muted)" }}>
+                            <Loader2 size={32} style={{ animation: "spin 1s linear infinite", margin: "0 auto 0.75rem" }} />
+                            <div style={{ fontSize: "0.9rem", fontWeight: 600 }}>Pose {res.poseId}</div>
                           </div>
                         )}
-                        {res.status === "success" && (
-                          <img
-                            src={res.blobUrl}
-                            style={{
-                              width: "100%",
-                              height: "100%",
-                              objectFit: "cover",
-                            }}
-                          />
-                        )}
+                        {res.status === "success" && <img src={res.blobUrl} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
                         {res.status === "error" && (
-                          <div
-                            style={{
-                              textAlign: "center",
-                              color: "var(--aurora-danger)",
-                              padding: "1rem",
-                            }}
-                          >
-                            <AlertCircle
-                              size={28}
-                              style={{ margin: "0 auto 0.5rem" }}
-                            />
-                            <div
-                              style={{ fontSize: "0.8rem", fontWeight: 600 }}
-                            >
-                              {res.errorMsg}
-                            </div>
+                          <div style={{ textAlign: "center", color: "var(--aurora-danger)", padding: "1rem" }}>
+                            <AlertCircle size={28} style={{ margin: "0 auto 0.5rem" }} />
+                            <div style={{ fontSize: "0.8rem", fontWeight: 600 }}>{res.errorMsg}</div>
                           </div>
                         )}
                       </div>
                       {res.status === "success" && (
-                        <button
-                          onClick={() =>
-                            triggerDownload(res.blobUrl, res.filename)
-                          }
-                          className="aurora-btn aurora-btn-outline"
-                          style={{ padding: "0.6rem" }}
-                        >
+                        <button onClick={() => triggerDownload(res.blobUrl, res.filename)} className="aurora-btn aurora-btn-outline" style={{ padding: "0.6rem" }}>
                           <Download size={16} /> Download
                         </button>
                       )}

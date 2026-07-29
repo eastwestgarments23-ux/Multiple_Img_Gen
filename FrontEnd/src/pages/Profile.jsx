@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { User, Mail, Phone, Calendar, Image as ImageIcon, Loader2, AlertCircle, Zap, Clock, ChevronLeft, ChevronRight, Award } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { User, Mail, Phone, Calendar, Image as ImageIcon, Loader2, AlertCircle, Clock, ChevronLeft, ChevronRight, Key, Coins, CheckCircle2 } from 'lucide-react';
 
 export default function Profile({ user }) {
   const [profileData, setProfileData] = useState(null);
@@ -7,30 +8,37 @@ export default function Profile({ user }) {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
   
+  // API Key Management State
+  const [apiKeyInput, setApiKeyInput] = useState('');
+  const [isSavingKey, setIsSavingKey] = useState(false);
+  const [keySuccessMsg, setKeySuccessMsg] = useState('');
+  
   // Pagination State
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [isGalleryLoading, setIsGalleryLoading] = useState(false);
 
   useEffect(() => {
-    const fetchProfileData = async () => {
-      try {
-        const token = localStorage.getItem('aurora_token');
-        if (!token) throw new Error('Authentication token missing. Please log in again.');
-
-        const profileRes = await fetch('/api/profile', { headers: { 'Authorization': `Bearer ${token}` }});
-        const profileJson = await profileRes.json();
-        if (!profileRes.ok) throw new Error(profileJson.error || 'Failed to fetch profile.');
-        setProfileData(profileJson);
-
-        fetchGalleryPage(1, token);
-      } catch (err) {
-        setError(err.message);
-        setIsLoading(false);
-      }
-    };
     fetchProfileData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const fetchProfileData = async () => {
+    try {
+      const token = localStorage.getItem('aurora_token');
+      if (!token) throw new Error('Authentication token missing. Please log in again.');
+
+      const profileRes = await fetch('/api/profile', { headers: { 'Authorization': `Bearer ${token}` }});
+      const profileJson = await profileRes.json();
+      if (!profileRes.ok) throw new Error(profileJson.error || 'Failed to fetch profile.');
+      setProfileData(profileJson);
+
+      fetchGalleryPage(1, token);
+    } catch (err) {
+      setError(err.message);
+      setIsLoading(false);
+    }
+  };
 
   const fetchGalleryPage = async (page, tokenString = null) => {
       setIsGalleryLoading(true);
@@ -57,6 +65,38 @@ export default function Profile({ user }) {
       }
   };
 
+  const handleSaveApiKey = async (e) => {
+    e.preventDefault();
+    setIsSavingKey(true);
+    setError('');
+    setKeySuccessMsg('');
+
+    try {
+      const token = localStorage.getItem('aurora_token');
+      const res = await fetch('/api/save-api-key', {
+        method: 'POST',
+        headers: { 
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}` 
+        },
+        body: JSON.stringify({ apiKey: apiKeyInput })
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to save API Key');
+
+      setKeySuccessMsg(data.message || 'API Key saved securely.');
+      setApiKeyInput('');
+      
+      // Refresh profile data to update hasApiKey flag
+      await fetchProfileData();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setIsSavingKey(false);
+    }
+  };
+
   if (isLoading) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1 }}>
@@ -67,7 +107,7 @@ export default function Profile({ user }) {
     );
   }
 
-  if (error) {
+  if (error && !profileData) {
     return (
       <div style={{ padding: '2rem', maxWidth: '800px', margin: '0 auto', width: '100%' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: '#fef2f2', color: 'var(--aurora-danger)', padding: '1rem', borderRadius: 'var(--radius-md)', border: '1px solid #fecaca' }}>
@@ -78,8 +118,7 @@ export default function Profile({ user }) {
     );
   }
 
-  const { user: userData, usage } = profileData;
-  const usagePercentage = (usage.today / usage.limit) * 100;
+  const { user: userData } = profileData;
 
   return (
     <div style={{ padding: '2rem 5%', maxWidth: '1200px', margin: '0 auto', width: '100%', flex: 1 }}>
@@ -87,15 +126,50 @@ export default function Profile({ user }) {
       <div style={{ marginBottom: '2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: '1rem' }}>
         <div>
             <h1 style={{ fontSize: '2rem', fontWeight: 700, margin: '0 0 0.5rem 0' }}>Welcome, {userData.name.split(' ')[0]}</h1>
-            <p style={{ color: 'var(--aurora-text-muted)', margin: 0 }}>Manage your account settings and view your generation history.</p>
+            <p style={{ color: 'var(--aurora-text-muted)', margin: 0 }}>Manage your account settings, API keys, and generation history.</p>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'var(--aurora-primary)', color: 'white', padding: '0.5rem 1rem', borderRadius: 'var(--radius-full)', fontWeight: 600, fontSize: '0.9rem', boxShadow: 'var(--shadow-sm)' }}>
-            <Award size={18} />
-            <span style={{ textTransform: 'capitalize' }}>{userData.tier || 'Free'} Plan</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'linear-gradient(135deg, var(--aurora-primary), var(--aurora-secondary))', color: 'white', padding: '0.6rem 1.25rem', borderRadius: 'var(--radius-full)', fontWeight: 600, fontSize: '1rem', boxShadow: 'var(--shadow-sm)' }}>
+            <Coins size={20} />
+            <span>{userData.tokens} Tokens Available</span>
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '1.5rem', marginBottom: '2rem' }}>
+      {/* Global Error Notice for profile actions */}
+      {error && profileData && (
+        <div style={{ marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem', background: '#fef2f2', color: 'var(--aurora-danger)', padding: '1rem', borderRadius: 'var(--radius-md)', border: '1px solid #fecaca' }}>
+          <AlertCircle size={20} />
+          <span style={{ fontWeight: 500 }}>{error}</span>
+        </div>
+      )}
+
+      {/* API Key Missing Alert */}
+      {!userData.hasApiKey && (
+        <div style={{ 
+            marginBottom: '2rem', 
+            background: '#fffbeb', 
+            color: '#b45309', 
+            padding: '1.25rem', 
+            borderRadius: 'var(--radius-md)', 
+            border: '1px solid #fde68a',
+            display: 'flex',
+            gap: '1rem',
+            alignItems: 'flex-start',
+            boxShadow: 'var(--shadow-sm)'
+        }}>
+            <AlertCircle size={24} style={{ flexShrink: 0, marginTop: '2px' }} />
+            <div>
+                <h4 style={{ margin: '0 0 0.5rem 0', fontSize: '1.1rem', fontWeight: 700 }}>Action Required: Add Your Gemini API Key</h4>
+                <p style={{ margin: '0 0 0.5rem 0', lineHeight: 1.5 }}>
+                    You must add your own Google Gemini API key to generate images. <strong>You will be responsible for your own Google Cloud API billing and usage.</strong>
+                </p>
+                <Link to="/api-key-guide" style={{ color: '#b45309', fontWeight: 600, textDecoration: 'underline', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
+                    Read our step-by-step guide on how to get your Gemini API Key
+                </Link>
+            </div>
+        </div>
+      )}
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1.5rem', marginBottom: '2rem' }}>
         {/* Account Details Card */}
         <div className="glass-panel" style={{ padding: '1.5rem', borderRadius: 'var(--radius-lg)' }}>
           <h2 style={{ fontSize: '1.25rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1.5rem' }}>
@@ -118,24 +192,58 @@ export default function Profile({ user }) {
           </div>
         </div>
 
-        {/* Usage Limits Card */}
+        {/* API Key Management Card */}
         <div className="glass-panel" style={{ padding: '1.5rem', borderRadius: 'var(--radius-lg)' }}>
           <h2 style={{ fontSize: '1.25rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1.5rem' }}>
-            <Zap size={20} style={{ color: 'var(--aurora-primary)' }} />
-            Daily Generation Limit
+            <Key size={20} style={{ color: 'var(--aurora-primary)' }} />
+            API Key Management
           </h2>
-          <div style={{ marginBottom: '1rem' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem', fontWeight: 500 }}>
-              <span>Images Generated Today</span>
-              <span>{usage.today} / {usage.limit}</span>
+          
+          {userData.hasApiKey && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--aurora-success)', marginBottom: '1rem', background: '#ecfdf5', padding: '0.75rem', borderRadius: 'var(--radius-md)', fontWeight: 600 }}>
+              <CheckCircle2 size={18} />
+              Your API Key is securely encrypted and saved.
             </div>
-            <div style={{ width: '100%', height: '8px', background: 'var(--aurora-border)', borderRadius: 'var(--radius-full)', overflow: 'hidden' }}>
-              <div style={{ height: '100%', width: `${Math.min(usagePercentage, 100)}%`, background: usagePercentage >= 100 ? 'var(--aurora-danger)' : 'var(--aurora-primary)', borderRadius: 'var(--radius-full)', transition: 'width 0.5s ease-out' }} />
+          )}
+
+          <form onSubmit={handleSaveApiKey} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            <div>
+              <label className="aurora-label" htmlFor="apiKey">
+                {userData.hasApiKey ? 'Overwrite API Key' : 'Enter Google Gemini API Key'}
+              </label>
+              <input
+                type="password"
+                id="apiKey"
+                value={apiKeyInput}
+                onChange={(e) => setApiKeyInput(e.target.value)}
+                placeholder="AIzaSy..."
+                className="aurora-input"
+                disabled={isSavingKey}
+              />
+              <p style={{ fontSize: '0.8rem', color: 'var(--aurora-text-muted)', marginTop: '0.5rem' }}>
+                Keys are AES-256 encrypted at rest. We never expose your key.
+              </p>
             </div>
-          </div>
-          <p style={{ fontSize: '0.875rem', color: 'var(--aurora-text-muted)', lineHeight: 1.5 }}>
-            {usage.remaining > 0 ? `You have ${usage.remaining} generation${usage.remaining === 1 ? '' : 's'} remaining for today. Your limit resets at midnight.` : `You have reached your daily limit of ${usage.limit} generations. Please upgrade your tier or check back tomorrow!`}
-          </p>
+            
+            <button 
+              type="submit" 
+              className="aurora-btn aurora-btn-primary" 
+              disabled={isSavingKey || !apiKeyInput.trim()}
+              style={{ justifyContent: 'center' }}
+            >
+              {isSavingKey ? (
+                <><Loader2 size={16} className="spin" /> Saving...</>
+              ) : (
+                <>Save API Key</>
+              )}
+            </button>
+
+            {keySuccessMsg && (
+              <div style={{ color: 'var(--aurora-success)', fontSize: '0.9rem', fontWeight: 600, textAlign: 'center' }}>
+                {keySuccessMsg}
+              </div>
+            )}
+          </form>
         </div>
       </div>
 
