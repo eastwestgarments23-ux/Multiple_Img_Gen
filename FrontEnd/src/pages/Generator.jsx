@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
-import { CheckCircle, Loader2, AlertCircle, Key } from "lucide-react";
+import { CheckCircle, Loader2, AlertCircle, Key, X } from "lucide-react";
 
 // Components & Data
 import { AVAILABLE_MODELS } from "../data/constants.js";
@@ -183,97 +183,109 @@ export default function Generator({ user }) {
   };
 
   return (
-    <div style={{ padding: "3rem 5%", maxWidth: "1400px", margin: "0 auto", width: "100%" }}>
-      
-      {/* System Alerts */}
-      {profileData && !profileData.hasApiKey && (
-        <div style={{
-            background: "#fffbeb", border: "1px solid #fde68a", padding: "1.5rem", borderRadius: "var(--radius-lg)",
-            marginBottom: "2rem", display: "flex", gap: "1rem", alignItems: "flex-start", boxShadow: "var(--shadow-md)"
-        }}>
-          <AlertCircle size={28} color="#b45309" style={{ marginTop: "4px" }} />
-          <div>
-            <h3 style={{ margin: "0 0 0.5rem 0", color: "#b45309", fontSize: "1.25rem" }}>API Key Required</h3>
-            <p style={{ margin: "0 0 1rem 0", color: "#92400e", lineHeight: 1.5 }}>
-              You must supply your own Google Gemini API key to use this generator. You are responsible for your own Cloud API billing.
-            </p>
-            <Link to="/profile" className="aurora-btn" style={{ background: "#b45309", color: "white", padding: "0.5rem 1rem", fontSize: "0.95rem" }}>
-              <Key size={16} /> Configure API Key in Profile
-            </Link>
+    <>
+      <div style={{ padding: "3rem 5%", maxWidth: "1400px", margin: "0 auto", width: "100%" }}>
+        
+        {/* System Alerts */}
+        {profileData && !profileData.hasApiKey && (
+          <div style={{
+              background: "#fffbeb", border: "1px solid #fde68a", padding: "1.5rem", borderRadius: "var(--radius-lg)",
+              marginBottom: "2rem", display: "flex", gap: "1rem", alignItems: "flex-start", boxShadow: "var(--shadow-md)"
+          }}>
+            <AlertCircle size={28} color="#b45309" style={{ marginTop: "4px" }} />
+            <div>
+              <h3 style={{ margin: "0 0 0.5rem 0", color: "#b45309", fontSize: "1.25rem" }}>API Key Required</h3>
+              <p style={{ margin: "0 0 1rem 0", color: "#92400e", lineHeight: 1.5 }}>
+                You must supply your own Google Gemini API key to use this generator. You are responsible for your own Cloud API billing.
+              </p>
+              <Link to="/profile" className="aurora-btn" style={{ background: "#b45309", color: "white", padding: "0.5rem 1rem", fontSize: "0.95rem" }}>
+                <Key size={16} /> Configure API Key in Profile
+              </Link>
+            </div>
+          </div>
+        )}
+
+        {/* Token Shop (Appears if limit hit) */}
+        {showTokenShop && (
+          <TokenShop 
+            user={profileData || user} 
+            onPaymentSuccess={() => {
+              setShowTokenShop(false);
+              fetchProfileData();
+            }} 
+          />
+        )}
+
+        {/* Modular Generation Pipeline */}
+        <ProductUploader 
+          productImages={productImages}
+          setProductImages={setProductImages}
+          isGenerating={isGenerating}
+          setGlobalError={setGlobalError}
+        />
+
+        <ModelSelector 
+          isGenerating={isGenerating}
+          customModel={customModel}
+          setCustomModel={setCustomModel}
+          selectedModelId={selectedModelId}
+          setSelectedModelId={setSelectedModelId}
+          ethnicityFilter={ethnicityFilter}
+          setEthnicityFilter={setEthnicityFilter}
+          brokenModels={brokenModels}
+          setBrokenModels={setBrokenModels}
+        />
+
+        {/* Action Button */}
+        <button
+          className="aurora-btn aurora-btn-primary"
+          style={{ width: "100%", padding: "1.25rem", fontSize: "1.25rem", marginBottom: "2.5rem", borderRadius: "var(--radius-lg)" }}
+          onClick={handleGenerate}
+          disabled={isGenerating || !selectedModelId || productImages.length === 0 || (profileData && !profileData.hasApiKey)}
+        >
+          {isGenerating ? (
+            <>
+              <Loader2 size={28} className="spin" style={{ animation: "spin 1s linear infinite" }} />
+              <span>Processing Matrix...</span>
+            </>
+          ) : (
+            <>
+              <CheckCircle size={28} />
+              <span>Generate Outputs</span>
+            </>
+          )}
+        </button>
+
+        <ResultsMatrix 
+          generationResults={generationResults}
+          isGenerating={isGenerating}
+          productImages={productImages}
+          selectedModelId={selectedModelId}
+        />
+
+        <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+      </div>
+
+      {/* Themed Alert Modal for Global Validation Errors */}
+      {globalError && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(4px)', padding: '1rem' }}>
+          <div className="glass-panel" style={{ background: 'white', padding: '2rem', borderRadius: 'var(--radius-lg)', maxWidth: '400px', width: '100%', borderTop: `4px solid var(--aurora-danger)`, boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)', position: 'relative' }}>
+            <button onClick={() => setGlobalError("")} style={{ position: 'absolute', top: '1rem', right: '1rem', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--aurora-text-muted)' }}>
+              <X size={20} />
+            </button>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', gap: '1rem' }}>
+              <AlertCircle size={48} style={{ color: 'var(--aurora-danger)' }} />
+              <h3 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 700 }}>Action Required</h3>
+              <p style={{ margin: 0, color: 'var(--aurora-text-muted)', lineHeight: 1.5 }}>
+                {globalError}
+              </p>
+              <button onClick={() => setGlobalError("")} className="aurora-btn" style={{ width: '100%', justifyContent: 'center', marginTop: '1rem', background: 'var(--aurora-danger)', color: 'white' }}>
+                Understood
+              </button>
+            </div>
           </div>
         </div>
       )}
-
-      {/* Token Shop (Appears if limit hit) */}
-      {showTokenShop && (
-        <TokenShop 
-          user={profileData || user} 
-          onPaymentSuccess={() => {
-            setShowTokenShop(false);
-            fetchProfileData();
-          }} 
-        />
-      )}
-
-      {/* Global Error Banner */}
-      {globalError && (
-        <div style={{
-            display: "flex", alignItems: "center", gap: "0.75rem", background: "#fef2f2", color: "var(--aurora-danger)",
-            padding: "1.25rem", borderRadius: "var(--radius-md)", border: "1px solid #fecaca", marginBottom: "2rem", boxShadow: "var(--shadow-sm)"
-        }}>
-          <AlertCircle size={24} />
-          <span style={{ fontWeight: 600, fontSize: "1.1rem" }}>{globalError}</span>
-        </div>
-      )}
-
-      {/* Modular Generation Pipeline */}
-      <ProductUploader 
-        productImages={productImages}
-        setProductImages={setProductImages}
-        isGenerating={isGenerating}
-        setGlobalError={setGlobalError}
-      />
-
-      <ModelSelector 
-        isGenerating={isGenerating}
-        customModel={customModel}
-        setCustomModel={setCustomModel}
-        selectedModelId={selectedModelId}
-        setSelectedModelId={setSelectedModelId}
-        ethnicityFilter={ethnicityFilter}
-        setEthnicityFilter={setEthnicityFilter}
-        brokenModels={brokenModels}
-        setBrokenModels={setBrokenModels}
-      />
-
-      {/* Action Button */}
-      <button
-        className="aurora-btn aurora-btn-primary"
-        style={{ width: "100%", padding: "1.25rem", fontSize: "1.25rem", marginBottom: "2.5rem", borderRadius: "var(--radius-lg)" }}
-        onClick={handleGenerate}
-        disabled={isGenerating || !selectedModelId || productImages.length === 0 || (profileData && !profileData.hasApiKey)}
-      >
-        {isGenerating ? (
-          <>
-            <Loader2 size={28} className="spin" style={{ animation: "spin 1s linear infinite" }} />
-            <span>Processing Matrix...</span>
-          </>
-        ) : (
-          <>
-            <CheckCircle size={28} />
-            <span>Generate Outputs</span>
-          </>
-        )}
-      </button>
-
-      <ResultsMatrix 
-        generationResults={generationResults}
-        isGenerating={isGenerating}
-        productImages={productImages}
-        selectedModelId={selectedModelId}
-      />
-
-      <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
-    </div>
+    </>
   );
 }
