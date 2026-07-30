@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { User, Mail, Phone, Calendar, Image as ImageIcon, Loader2, AlertCircle, Clock, ChevronLeft, ChevronRight, Key, Coins, CheckCircle2 } from 'lucide-react';
+import { User, Mail, Phone, Calendar, Image as ImageIcon, Loader2, AlertCircle, Clock, ChevronLeft, ChevronRight, Key, Coins, CheckCircle2, Trash2 } from 'lucide-react';
+import TokenShop from '../components/TokenShop.jsx';
 
 export default function Profile({ user }) {
   const [profileData, setProfileData] = useState(null);
@@ -11,6 +12,7 @@ export default function Profile({ user }) {
   // API Key Management State
   const [apiKeyInput, setApiKeyInput] = useState('');
   const [isSavingKey, setIsSavingKey] = useState(false);
+  const [isDeletingKey, setIsDeletingKey] = useState(false);
   const [keySuccessMsg, setKeySuccessMsg] = useState('');
   
   // Pagination State
@@ -97,6 +99,39 @@ export default function Profile({ user }) {
     }
   };
 
+  const handleDeleteApiKey = async () => {
+    if (!window.confirm("Are you sure you want to delete your API key? You will not be able to generate images until you add a new one.")) return;
+    
+    setIsDeletingKey(true);
+    setError('');
+    setKeySuccessMsg('');
+
+    try {
+      const token = localStorage.getItem('aurora_token');
+      const res = await fetch('/api/save-api-key', {
+        method: 'POST',
+        headers: { 
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}` 
+        },
+        body: JSON.stringify({ apiKey: '' }) // Empty string triggers database NULLing
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to delete API Key');
+
+      setKeySuccessMsg('API Key successfully removed.');
+      setApiKeyInput('');
+      
+      // Refresh profile data to update hasApiKey flag
+      await fetchProfileData();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setIsDeletingKey(false);
+    }
+  };
+
   if (isLoading) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1 }}>
@@ -169,6 +204,12 @@ export default function Profile({ user }) {
         </div>
       )}
 
+      {/* REUSABLE TOKEN SHOP COMPONENT */}
+      <TokenShop 
+        user={userData} 
+        onPaymentSuccess={() => fetchProfileData()} 
+      />
+
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1.5rem', marginBottom: '2rem' }}>
         {/* Account Details Card */}
         <div className="glass-panel" style={{ padding: '1.5rem', borderRadius: 'var(--radius-lg)' }}>
@@ -218,25 +259,43 @@ export default function Profile({ user }) {
                 onChange={(e) => setApiKeyInput(e.target.value)}
                 placeholder="AIzaSy..."
                 className="aurora-input"
-                disabled={isSavingKey}
+                disabled={isSavingKey || isDeletingKey}
               />
               <p style={{ fontSize: '0.8rem', color: 'var(--aurora-text-muted)', marginTop: '0.5rem' }}>
                 Keys are AES-256 encrypted at rest. We never expose your key.
               </p>
             </div>
             
-            <button 
-              type="submit" 
-              className="aurora-btn aurora-btn-primary" 
-              disabled={isSavingKey || !apiKeyInput.trim()}
-              style={{ justifyContent: 'center' }}
-            >
-              {isSavingKey ? (
-                <><Loader2 size={16} className="spin" /> Saving...</>
-              ) : (
-                <>Save API Key</>
+            <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+              <button 
+                type="submit" 
+                className="aurora-btn aurora-btn-primary" 
+                disabled={isSavingKey || !apiKeyInput.trim() || isDeletingKey}
+                style={{ flex: 1, minWidth: '120px', justifyContent: 'center' }}
+              >
+                {isSavingKey ? (
+                  <><Loader2 size={16} className="spin" /> Saving...</>
+                ) : (
+                  <>Save API Key</>
+                )}
+              </button>
+              
+              {userData.hasApiKey && (
+                <button 
+                  type="button" 
+                  onClick={handleDeleteApiKey}
+                  className="aurora-btn" 
+                  disabled={isDeletingKey || isSavingKey}
+                  style={{ flex: 1, minWidth: '120px', justifyContent: 'center', background: '#fef2f2', color: 'var(--aurora-danger)', border: '1px solid #fecaca' }}
+                >
+                  {isDeletingKey ? (
+                    <><Loader2 size={16} className="spin" /> Deleting...</>
+                  ) : (
+                    <><Trash2 size={16} /> Delete Key</>
+                  )}
+                </button>
               )}
-            </button>
+            </div>
 
             {keySuccessMsg && (
               <div style={{ color: 'var(--aurora-success)', fontSize: '0.9rem', fontWeight: 600, textAlign: 'center' }}>

@@ -120,7 +120,7 @@ async function initDB() {
         const [tokensCol] = await connection.query(`SHOW COLUMNS FROM users LIKE 'tokens'`);
         if (tokensCol.length === 0) {
             console.log("⚙️ Migrating database: Adding 'tokens' column...");
-            await connection.query(`ALTER TABLE users ADD COLUMN tokens INT DEFAULT 10 AFTER password_hash`);
+            await connection.query(`ALTER TABLE users ADD COLUMN tokens INT DEFAULT 0 AFTER password_hash`);
         }
 
         const [apiKeyCol] = await connection.query(`SHOW COLUMNS FROM users LIKE 'api_key'`);
@@ -166,8 +166,8 @@ app.post('/api/signup', async (req, res) => {
         if (existing.length > 0) return res.status(409).json({ error: "Email or Phone already exists." });
 
         const hash = await bcrypt.hash(password, 10);
-        // Grant 10 free tokens on sign up
-        await pool.query(`INSERT INTO users (name, email, phone, password_hash, tokens) VALUES (?, ?, ?, ?, ?)`, [name, email, phone, hash, 10]);
+        // Initial tokens set to 0 (No free generations)
+        await pool.query(`INSERT INTO users (name, email, phone, password_hash, tokens) VALUES (?, ?, ?, ?, ?)`, [name, email, phone, hash, 0]);
         res.status(201).json({ success: true, message: "Account created." });
     } catch (err) {
         res.status(500).json({ error: "Registration failed." });
